@@ -2,14 +2,16 @@
 Chuyển đổi Giọng nói — Speech-to-Text phân tích cuộc gọi.
 
 Ứng dụng web hiển thị bản ghi cuộc gọi dưới dạng khung chat đối thoại,
-tự động tách 2 người nói (speaker diarization).
+tự động tách hai người nói (speaker diarization).
 
-Chạy:  python app.py
+Chạy cục bộ:      python app.py
+Hugging Face:     Space tự chạy file này (sdk: gradio, app_file: app.py)
 """
 
 from __future__ import annotations
 
 import html
+import logging
 import os
 import time
 from dataclasses import dataclass
@@ -20,9 +22,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+log = logging.getLogger("stt")
+
+
 # --------------------------------------------------------------------------- #
-# Cấu hình
+# Cấu hình (trên Hugging Face: đặt ở tab Settings → Variables and secrets)
 # --------------------------------------------------------------------------- #
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, "") or default)
+    except ValueError:
+        log.warning("Biến %s không phải số, dùng mặc định %s", name, default)
+        return default
+
 
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -33,12 +51,24 @@ GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 DEEPGRAM_MODEL = os.getenv("DEEPGRAM_MODEL", "nova-2")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
 
-# Timeout đủ rộng cho file dài, nhưng vẫn fail nhanh nếu mạng chết.
-REQUEST_TIMEOUT = (10, 180)  # (connect, read)
+# Chạy nhiều người cùng lúc: công việc chủ yếu là chờ mạng nên thread rất rẻ.
+CONCURRENCY_LIMIT = _env_int("CONCURRENCY_LIMIT", 8)
+QUEUE_MAX_SIZE = _env_int("QUEUE_MAX_SIZE", 40)
+
+MAX_FILE_MB = _env_int("MAX_FILE_MB", 100)
+GROQ_MAX_MB = 25  # giới hạn cứng phía Groq
+
+REQUEST_TIMEOUT = (10, _env_int("READ_TIMEOUT", 300))  # (connect, read)
+MAX_RETRIES = _env_int("MAX_RETRIES", 3)
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
+# Xoá file ghi âm khỏi máy chủ ngay sau khi bóc băng xong (dữ liệu nhạy cảm).
+DELETE_UPLOAD_AFTER = os.getenv("DELETE_UPLOAD_AFTER", "1") not in {"0", "false", "False"}
+
+IS_SPACE = bool(os.getenv("SPACE_ID"))
 
 LABEL_AGENT = "THẨM ĐỊNH VIÊN"
 LABEL_CUSTOMER = "KHÁCH HÀNG"
-
 LEGEND_AGENT = "Thẩm định viên"
 LEGEND_CUSTOMER = "Khách hàng"
 
@@ -70,22 +100,82 @@ class Turn:
     text: str
 
 
+@dataclass
+class Result:
+    turns: list[Turn]
+    duration: float  # thời lượng audio (giây), 0 nếu nhà cung cấp không trả về
+
+
 class TranscriptionError(Exception):
-    """Lỗi có thông điệp thân thiện để hiển thị thẳng cho người dùng."""
+    """Lỗi có thông điệp tiếng Việt, hiển thị thẳng cho người dùng."""
 
 
 # --------------------------------------------------------------------------- #
-# STT engines
+# Gọi API
 # --------------------------------------------------------------------------- #
 
 
 def _guess_mime(path: str) -> str:
-    ext = os.path.splitext(path)[1].lower()
-    return MIME_BY_EXT.get(ext, "application/octet-stream")
+    return MIME_BY_EXT.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
 
 
-def transcribe_deepgram(path: str, language: str) -> list[Turn]:
-    """Deepgram Nova-2: diarization gốc, trả về utterances đã tách người nói."""
+def _post_with_retry(build_request, provider: str) -> requests.Response:
+    """Gọi API, thử lại khi gặp lỗi tạm thời (429 / 5xx / timeout).
+
+    `build_request` được gọi lại ở mỗi lần thử để mở lại file — stream đã đọc
+    một lần thì không tua lại được.
+    """
+    last_error: Exception | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = build_request()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_error = exc
+            log.warning("%s: lỗi mạng lần %d/%d: %s", provider, attempt, MAX_RETRIES, exc)
+        else:
+            if response.status_code not in RETRY_STATUS:
+                return response
+            last_error = None
+            log.warning(
+                "%s: HTTP %d lần %d/%d", provider, response.status_code, attempt, MAX_RETRIES
+            )
+            if attempt == MAX_RETRIES:
+                return response
+
+        time.sleep(2 ** (attempt - 1))
+
+    if isinstance(last_error, requests.exceptions.Timeout):
+        raise TranscriptionError(
+            f"{provider} không phản hồi kịp. File có thể quá dài — hãy thử lại sau ít phút."
+        )
+    raise TranscriptionError(f"Không kết nối được tới {provider}. Vui lòng thử lại.")
+
+
+def _fail_on_error(response: requests.Response, provider: str, key_name: str) -> None:
+    if response.ok:
+        return
+
+    # Không đưa nội dung thô của nhà cung cấp ra giao diện; chỉ ghi vào log.
+    log.error("%s HTTP %d: %s", provider, response.status_code, response.text[:500])
+
+    if response.status_code in (401, 403):
+        raise TranscriptionError(
+            f"{key_name} không hợp lệ hoặc đã hết hạn. Vui lòng báo quản trị viên."
+        )
+    if response.status_code == 429:
+        raise TranscriptionError(
+            f"{provider} đang quá tải hoặc đã hết hạn mức. Vui lòng thử lại sau ít phút."
+        )
+    if response.status_code == 413:
+        raise TranscriptionError(f"File vượt quá giới hạn dung lượng của {provider}.")
+    if response.status_code >= 500:
+        raise TranscriptionError(f"{provider} đang gặp sự cố. Vui lòng thử lại sau ít phút.")
+    raise TranscriptionError(f"{provider} từ chối yêu cầu (mã {response.status_code}).")
+
+
+def transcribe_deepgram(path: str, language: str) -> Result:
+    """Deepgram Nova-2 — diarization gốc, trả về utterances đã tách người nói."""
     params = {
         "model": DEEPGRAM_MODEL,
         "language": language,
@@ -95,32 +185,34 @@ def transcribe_deepgram(path: str, language: str) -> list[Turn]:
         "utterances": "true",
         "filler_words": "false",
     }
-    with open(path, "rb") as fh:
-        response = requests.post(
-            DEEPGRAM_URL,
-            params=params,
-            headers={
-                "Authorization": f"Token {DEEPGRAM_API_KEY}",
-                "Content-Type": _guess_mime(path),
-            },
-            data=fh,
-            timeout=REQUEST_TIMEOUT,
-        )
 
-    if response.status_code == 401:
-        raise TranscriptionError("DEEPGRAM_API_KEY không hợp lệ. Kiểm tra lại file .env.")
-    if not response.ok:
-        raise TranscriptionError(f"Deepgram trả về lỗi {response.status_code}: {response.text[:300]}")
+    def build():
+        with open(path, "rb") as fh:
+            return requests.post(
+                DEEPGRAM_URL,
+                params=params,
+                headers={
+                    "Authorization": f"Token {DEEPGRAM_API_KEY}",
+                    "Content-Type": _guess_mime(path),
+                },
+                data=fh,
+                timeout=REQUEST_TIMEOUT,
+            )
+
+    response = _post_with_retry(build, "Deepgram")
+    _fail_on_error(response, "Deepgram", "DEEPGRAM_API_KEY")
 
     payload = response.json()
-    utterances = payload.get("results", {}).get("utterances") or []
+    results = payload.get("results", {}) or {}
+    duration = float((payload.get("metadata", {}) or {}).get("duration", 0.0) or 0.0)
+    utterances = results.get("utterances") or []
 
     if not utterances:
-        # Không có utterances (hiếm) — lấy transcript phẳng làm 1 lượt thoại.
-        channels = payload.get("results", {}).get("channels") or []
+        channels = results.get("channels") or []
         alternatives = channels[0].get("alternatives") if channels else None
         flat = (alternatives[0].get("transcript") if alternatives else "") or ""
-        return [Turn(speaker=0, start=0.0, text=flat)] if flat.strip() else []
+        turns = [Turn(0, 0.0, flat.strip())] if flat.strip() else []
+        return Result(turns, duration)
 
     segments = [
         Turn(
@@ -130,47 +222,42 @@ def transcribe_deepgram(path: str, language: str) -> list[Turn]:
         )
         for item in utterances
     ]
-    return [seg for seg in segments if seg.text]
+    return Result([s for s in segments if s.text], duration)
 
 
-def transcribe_groq(path: str, language: str) -> list[Turn]:
-    """Groq Whisper: rất nhanh nhưng KHÔNG có diarization gốc.
+def transcribe_groq(path: str, language: str) -> Result:
+    """Groq Whisper — rất nhanh nhưng KHÔNG có diarization gốc.
 
-    Người nói được suy đoán bằng khoảng lặng giữa các segment — chỉ mang tính
-    tương đối. Dùng Deepgram nếu cần độ chính xác tách vai.
+    Người nói được suy đoán theo khoảng lặng giữa các đoạn, chỉ mang tính
+    tương đối. Dùng Deepgram khi cần tách vai chính xác.
     """
-    with open(path, "rb") as fh:
-        response = requests.post(
-            GROQ_URL,
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            files={"file": (os.path.basename(path), fh, _guess_mime(path))},
-            data={
-                "model": GROQ_MODEL,
-                "language": language,
-                "response_format": "verbose_json",
-                "temperature": "0",
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
 
-    if response.status_code == 401:
-        raise TranscriptionError("GROQ_API_KEY không hợp lệ. Kiểm tra lại file .env.")
-    if response.status_code == 413:
-        raise TranscriptionError(
-            "File vượt quá giới hạn dung lượng của Groq (~25MB). "
-            "Hãy nén file hoặc dùng Deepgram."
-        )
-    if not response.ok:
-        raise TranscriptionError(f"Groq trả về lỗi {response.status_code}: {response.text[:300]}")
+    def build():
+        with open(path, "rb") as fh:
+            return requests.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                files={"file": (os.path.basename(path), fh, _guess_mime(path))},
+                data={
+                    "model": GROQ_MODEL,
+                    "language": language,
+                    "response_format": "verbose_json",
+                    "temperature": "0",
+                },
+                timeout=REQUEST_TIMEOUT,
+            )
+
+    response = _post_with_retry(build, "Groq")
+    _fail_on_error(response, "Groq", "GROQ_API_KEY")
 
     payload = response.json()
+    duration = float(payload.get("duration", 0.0) or 0.0)
     segments = payload.get("segments") or []
 
     if not segments:
         flat = (payload.get("text") or "").strip()
-        return [Turn(speaker=0, start=0.0, text=flat)] if flat else []
+        return Result([Turn(0, 0.0, flat)] if flat else [], duration)
 
-    # Heuristic: khoảng lặng dài giữa 2 segment => nhiều khả năng đổi người nói.
     gap_threshold = 0.9
     turns: list[Turn] = []
     speaker = 0
@@ -183,10 +270,10 @@ def transcribe_groq(path: str, language: str) -> list[Turn]:
         start = float(segment.get("start", 0.0) or 0.0)
         if previous_end is not None and (start - previous_end) > gap_threshold:
             speaker = 1 - speaker
-        turns.append(Turn(speaker=speaker, start=start, text=text))
+        turns.append(Turn(speaker, start, text))
         previous_end = float(segment.get("end", start) or start)
 
-    return turns
+    return Result(turns, duration)
 
 
 # --------------------------------------------------------------------------- #
@@ -213,7 +300,7 @@ def format_timestamp(seconds: float) -> str:
 
 
 def role_of(speaker: int, swap: bool) -> str:
-    """Theo mặc định: Speaker 0 = khách hàng (trái), Speaker 1 = thẩm định viên (phải)."""
+    """Mặc định: Speaker 0 = khách hàng (trái), Speaker 1 = thẩm định viên (phải)."""
     is_agent = speaker != 0
     if swap:
         is_agent = not is_agent
@@ -221,7 +308,6 @@ def role_of(speaker: int, swap: bool) -> str:
 
 
 def render_chat(turns: list[Turn], swap: bool) -> str:
-    """Dựng khung chat timeline + legend."""
     bubbles = []
     for turn in turns:
         role = role_of(turn.speaker, swap)
@@ -250,11 +336,29 @@ def render_result_header(count: int) -> str:
 
 
 def to_plain_text(turns: list[Turn], swap: bool) -> str:
-    lines = []
-    for turn in turns:
-        label = LABEL_AGENT if role_of(turn.speaker, swap) == "agent" else LABEL_CUSTOMER
-        lines.append(f"[{format_timestamp(turn.start)}] {label}: {turn.text}")
-    return "\n".join(lines)
+    return "\n".join(
+        f"[{format_timestamp(t.start)}] "
+        f"{LABEL_AGENT if role_of(t.speaker, swap) == 'agent' else LABEL_CUSTOMER}: {t.text}"
+        for t in turns
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Engine khả dụng
+# --------------------------------------------------------------------------- #
+
+ENGINE_CHOICES: list[tuple[str, str]] = []
+if DEEPGRAM_API_KEY:
+    ENGINE_CHOICES.append(("Deepgram Nova-2 — tách người nói chính xác", "deepgram"))
+if GROQ_API_KEY:
+    ENGINE_CHOICES.append(("Groq Whisper — nhanh nhất, tách người nói tương đối", "groq"))
+
+DEFAULT_ENGINE = ENGINE_CHOICES[0][1] if ENGINE_CHOICES else "deepgram"
+
+if not ENGINE_CHOICES:
+    log.error("Chưa cấu hình DEEPGRAM_API_KEY hoặc GROQ_API_KEY — ứng dụng sẽ báo lỗi khi phân tích.")
+else:
+    log.info("Engine khả dụng: %s", ", ".join(value for _, value in ENGINE_CHOICES))
 
 
 # --------------------------------------------------------------------------- #
@@ -262,10 +366,9 @@ def to_plain_text(turns: list[Turn], swap: bool) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def analyze(file_path: str | None, engine: str, language: str, swap: bool):
+def analyze(file_path: str | None, engine: str, language: str, swap: bool, request: gr.Request):
     """Trả về: chat_html, header_html, raw_text, status, upload_screen, result_screen."""
-    keep_upload = gr.update(visible=True)
-    keep_result = gr.update(visible=False)
+    client = getattr(request, "session_hash", "?") if request else "?"
 
     def fail(message: str):
         return (
@@ -273,46 +376,83 @@ def analyze(file_path: str | None, engine: str, language: str, swap: bool):
             gr.update(),
             gr.update(),
             f'<div class="stt-status stt-error">{html.escape(message)}</div>',
-            keep_upload,
-            keep_result,
+            gr.update(visible=True),
+            gr.update(visible=False),
         )
 
+    if not ENGINE_CHOICES:
+        return fail(
+            "Máy chủ chưa được cấu hình API key. Quản trị viên cần thêm "
+            "DEEPGRAM_API_KEY hoặc GROQ_API_KEY vào phần Secrets."
+        )
     if not file_path:
         return fail("Vui lòng chọn một file ghi âm trước khi phân tích.")
+    if not os.path.exists(file_path):
+        return fail("File tải lên đã hết hạn trên máy chủ. Vui lòng tải lên lại.")
 
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in ACCEPTED_EXTS:
-        return fail(f"Định dạng {ext or 'không xác định'} chưa được hỗ trợ. Hãy dùng .mp3, .wav hoặc .m4a.")
+        return fail(
+            f"Định dạng {ext or 'không xác định'} chưa được hỗ trợ. Hãy dùng .mp3, .wav hoặc .m4a."
+        )
 
-    use_deepgram = engine.startswith("Deepgram")
-    if use_deepgram and not DEEPGRAM_API_KEY:
-        return fail("Chưa có DEEPGRAM_API_KEY. Thêm key vào file .env rồi khởi động lại ứng dụng.")
-    if not use_deepgram and not GROQ_API_KEY:
-        return fail("Chưa có GROQ_API_KEY. Thêm key vào file .env rồi khởi động lại ứng dụng.")
+    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    if size_mb > MAX_FILE_MB:
+        return fail(f"File nặng {size_mb:.0f}MB, vượt giới hạn {MAX_FILE_MB}MB của hệ thống.")
 
+    engine = engine if engine in {value for _, value in ENGINE_CHOICES} else DEFAULT_ENGINE
+    if engine == "groq" and size_mb > GROQ_MAX_MB:
+        return fail(
+            f"File nặng {size_mb:.0f}MB, vượt giới hạn {GROQ_MAX_MB}MB của Groq. "
+            "Hãy chọn Deepgram hoặc nén file lại."
+        )
+
+    log.info("[%s] bắt đầu: %.1fMB, engine=%s, lang=%s", client, size_mb, engine, language)
     started = time.perf_counter()
+
     try:
-        raw_segments = (
+        result = (
             transcribe_deepgram(file_path, language)
-            if use_deepgram
+            if engine == "deepgram"
             else transcribe_groq(file_path, language)
         )
     except TranscriptionError as exc:
+        log.warning("[%s] thất bại: %s", client, exc)
         return fail(str(exc))
-    except requests.exceptions.Timeout:
-        return fail("Hết thời gian chờ phản hồi từ API. Kiểm tra kết nối mạng và thử lại.")
-    except requests.exceptions.RequestException as exc:
-        return fail(f"Không kết nối được tới API: {exc}")
+    except ValueError:  # JSON hỏng
+        log.exception("[%s] phản hồi không phải JSON hợp lệ", client)
+        return fail("Máy chủ nhận dạng trả về dữ liệu không hợp lệ. Vui lòng thử lại.")
+    except Exception:
+        log.exception("[%s] lỗi không lường trước", client)
+        return fail("Đã xảy ra lỗi ngoài dự kiến. Vui lòng thử lại sau ít phút.")
 
     elapsed = time.perf_counter() - started
+    turns = merge_turns(result.turns)
 
-    turns = merge_turns(raw_segments)
     if not turns:
-        return fail("Không nhận được nội dung nào từ file này. File có thể bị lỗi hoặc không có tiếng nói.")
+        # Giữ lại file: người dùng có thể chọn lại ngôn ngữ rồi thử lần nữa.
+        log.info("[%s] không có nội dung sau %.1fs", client, elapsed)
+        return fail(
+            "Không nhận được nội dung nào từ file này. "
+            "File có thể bị lỗi, không có tiếng nói, hoặc sai ngôn ngữ đã chọn."
+        )
 
-    engine_name = f"Deepgram {DEEPGRAM_MODEL}" if use_deepgram else f"Groq {GROQ_MODEL}"
+    log.info("[%s] xong: %d lượt thoại, %.1fs", client, len(turns), elapsed)
+
+    # Chỉ xoá khi đã bóc băng thành công — nếu lỗi thì giữ lại để thử lại
+    # mà không phải tải lên từ đầu. Phần còn lại do delete_cache dọn định kỳ.
+    if DELETE_UPLOAD_AFTER:
+        _safe_remove(file_path, client)
+
+    engine_name = (
+        f"Deepgram {DEEPGRAM_MODEL}" if engine == "deepgram" else f"Groq {GROQ_MODEL}"
+    )
+    duration_note = (
+        f" · thời lượng {format_timestamp(result.duration)}" if result.duration else ""
+    )
     status = (
-        f'<div class="stt-status stt-ok">Hoàn tất trong <b>{elapsed:.1f}s</b> · {engine_name}</div>'
+        f'<div class="stt-status stt-ok">Hoàn tất trong <b>{elapsed:.1f}s</b>'
+        f"{duration_note} · {engine_name}</div>"
     )
 
     return (
@@ -323,6 +463,15 @@ def analyze(file_path: str | None, engine: str, language: str, swap: bool):
         gr.update(visible=False),
         gr.update(visible=True),
     )
+
+
+def _safe_remove(path: str, client: str) -> None:
+    """Xoá file ghi âm khỏi máy chủ — bản ghi cuộc gọi là dữ liệu nhạy cảm."""
+    try:
+        os.remove(path)
+        log.info("[%s] đã xoá file tải lên", client)
+    except OSError as exc:
+        log.warning("[%s] không xoá được file tải lên: %s", client, exc)
 
 
 def reset():
@@ -369,7 +518,6 @@ footer { display: none !important; }
   padding: 18px; background: #fff;
 }
 .stt-hint { font-size: 13px; color: var(--stt-muted); text-align: center; margin-top: 10px; }
-
 .stt-hidden { display: none !important; }
 
 .stt-status { text-align: center; font-size: 14px; padding: 8px 0; min-height: 8px; }
@@ -431,6 +579,14 @@ footer { display: none !important; }
 }
 .stt-dot-customer { background: #fff; border: 2px solid #cbd0d8; }
 
+/* ----- Điện thoại ----- */
+@media (max-width: 640px) {
+  .stt-header h1 { font-size: 24px; }
+  .stt-bubble { max-width: 90%; }
+  .stt-chat { padding: 14px; max-height: 62vh; }
+  .stt-legend { gap: 14px; font-size: 12px; }
+}
+
 /* ----- Dark mode ----- */
 .dark .stt-card, .dark .stt-legend { background: #1f2937; }
 .dark .stt-chat-wrap { background: #111827; border-color: #374151; }
@@ -467,14 +623,17 @@ COPY_JS = """
 () => {
   const box = document.querySelector('#stt_raw textarea');
   if (!box || !box.value) return;
-  navigator.clipboard.writeText(box.value).catch(() => {
-    box.select();
-    document.execCommand('copy');
-  });
+  navigator.clipboard.writeText(box.value).catch(() => {});
 }
 """
 
-with gr.Blocks(css=CSS, title="Chuyển đổi Giọng nói", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(
+    css=CSS,
+    title="Chuyển đổi Giọng nói",
+    theme=gr.themes.Soft(),
+    analytics_enabled=False,
+    delete_cache=(1800, 1800),  # dọn file tạm mỗi 30 phút
+) as demo:
     gr.HTML(
         '<div class="stt-header">'
         "<h1>Chuyển đổi Giọng nói</h1>"
@@ -491,21 +650,20 @@ with gr.Blocks(css=CSS, title="Chuyển đổi Giọng nói", theme=gr.themes.So
                 file_count="single",
                 type="filepath",
             )
-        gr.HTML('<div class="stt-hint">Hỗ trợ .mp3, .wav, .m4a — file 15 phút xử lý dưới 15 giây.</div>')
+        gr.HTML(
+            '<div class="stt-hint">Hỗ trợ .mp3, .wav, .m4a — tối đa '
+            f"{MAX_FILE_MB}MB. File 15 phút xử lý dưới 15 giây.</div>"
+        )
 
         with gr.Accordion("Tuỳ chọn nâng cao", open=False):
             engine_input = gr.Radio(
-                choices=[
-                    "Deepgram Nova-2 (khuyến nghị — tách người nói chính xác)",
-                    "Groq Whisper (nhanh nhất — tách người nói tương đối)",
-                ],
-                value="Deepgram Nova-2 (khuyến nghị — tách người nói chính xác)",
+                choices=ENGINE_CHOICES or [("Chưa cấu hình API key", "deepgram")],
+                value=DEFAULT_ENGINE,
                 label="Engine nhận dạng",
+                interactive=bool(ENGINE_CHOICES),
             )
             language_input = gr.Dropdown(
-                choices=["vi", "en", "multi"],
-                value="vi",
-                label="Ngôn ngữ",
+                choices=["vi", "en", "multi"], value="vi", label="Ngôn ngữ"
             )
             swap_input = gr.Checkbox(
                 value=False,
@@ -526,10 +684,7 @@ with gr.Blocks(css=CSS, title="Chuyển đổi Giọng nói", theme=gr.themes.So
         # Giữ trong DOM (không dùng visible=False, vì Gradio sẽ không render)
         # để nút "Sao chép nội dung" đọc được nội dung từ đây.
         raw_output = gr.Textbox(
-            elem_id="stt_raw",
-            elem_classes="stt-hidden",
-            show_label=False,
-            container=False,
+            elem_id="stt_raw", elem_classes="stt-hidden", show_label=False, container=False
         )
 
         back_button = gr.Button("← Phân tích cuộc gọi khác", size="lg")
@@ -538,24 +693,62 @@ with gr.Blocks(css=CSS, title="Chuyển đổi Giọng nói", theme=gr.themes.So
     analyze_button.click(
         fn=analyze,
         inputs=[audio_input, engine_input, language_input, swap_input],
-        outputs=[chat_output, result_header, raw_output, status_output, upload_screen, result_screen],
+        outputs=[
+            chat_output,
+            result_header,
+            raw_output,
+            status_output,
+            upload_screen,
+            result_screen,
+        ],
+        concurrency_limit=CONCURRENCY_LIMIT,
         show_progress="minimal",
     )
 
     copy_button.click(fn=None, inputs=None, outputs=None, js=COPY_JS)
 
-    demo.load(fn=None, inputs=None, outputs=None, js=LOCALIZE_JS)
-
     back_button.click(
         fn=reset,
         inputs=None,
-        outputs=[audio_input, chat_output, result_header, raw_output, status_output, upload_screen, result_screen],
+        outputs=[
+            audio_input,
+            chat_output,
+            result_header,
+            raw_output,
+            status_output,
+            upload_screen,
+            result_screen,
+        ],
     )
+
+    demo.load(fn=None, inputs=None, outputs=None, js=LOCALIZE_JS)
+
+
+demo.queue(default_concurrency_limit=CONCURRENCY_LIMIT, max_size=QUEUE_MAX_SIZE)
+
+
+def _auth():
+    """Bật đăng nhập nếu đặt APP_USERNAME + APP_PASSWORD (Space công khai nên bật)."""
+    user = os.getenv("APP_USERNAME", "").strip()
+    password = os.getenv("APP_PASSWORD", "").strip()
+    if user and password:
+        log.info("Đã bật đăng nhập cho tài khoản '%s'", user)
+        return (user, password)
+    if IS_SPACE:
+        log.warning(
+            "Space đang chạy KHÔNG có đăng nhập — bất kỳ ai cũng dùng được API key của bạn. "
+            "Đặt APP_USERNAME và APP_PASSWORD để giới hạn truy cập."
+        )
+    return None
 
 
 if __name__ == "__main__":
     demo.launch(
         server_name=os.getenv("HOST", "0.0.0.0"),
-        server_port=int(os.getenv("PORT", "7860")),
+        server_port=_env_int("PORT", 7860),
+        max_file_size=f"{MAX_FILE_MB}mb",
+        auth=_auth(),
+        ssr_mode=False,
         show_api=False,
+        show_error=False,
     )
