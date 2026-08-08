@@ -47,6 +47,7 @@ from src.config import (
     JobConfig,
 )
 from src.main_pipeline import PipelineResult, plan_stages
+from src.providers import DEFAULT_PROVIDER, PROVIDERS, TranslatorAgent
 from src.proxy_manager import ProxyServerManager
 from src.security_guard import get_hwid, verify_license
 
@@ -221,8 +222,15 @@ class MainWindow(QMainWindow):
         asr_form.addRow("Kiểu tính toán", self.compute_combo)
         asr_form.addRow("", self.chk_vad)
 
-        proxy_box = QGroupBox("Dịch thuật AI (Gemini)")
+        proxy_box = QGroupBox("Dịch thuật AI")
         proxy_form = QFormLayout(proxy_box)
+
+        # --- Nhà cung cấp ---
+        self.provider_combo = QComboBox()
+        for name, spec in PROVIDERS.items():
+            self.provider_combo.addItem(spec.label, name)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        proxy_form.addRow("Nhà cung cấp AI", self.provider_combo)
 
         # --- API key ---
         key_row = QHBoxLayout()
@@ -235,17 +243,19 @@ class MainWindow(QMainWindow):
         self.show_key_btn.toggled.connect(self._toggle_key_visibility)
         key_row.addWidget(self.api_key_input)
         key_row.addWidget(self.show_key_btn)
-        proxy_form.addRow("Gemini API key", key_row)
+        self.api_key_label = QLabel("API key")   # đổi theo provider đang chọn
+        proxy_form.addRow(self.api_key_label, key_row)
 
-        key_hint = QLabel(
-            'Lấy key miễn phí tại <a href="https://aistudio.google.com/apikey" '
-            'style="color:#4f8cff">aistudio.google.com/apikey</a>. '
-            "Key được lưu vào <b>config.ini</b> cạnh app, lần sau không phải nhập lại."
-        )
-        key_hint.setObjectName("subtitle")
-        key_hint.setWordWrap(True)
-        key_hint.setOpenExternalLinks(True)
-        proxy_form.addRow("", key_hint)
+        self.key_hint = QLabel()
+        self.key_hint.setObjectName("subtitle")
+        self.key_hint.setWordWrap(True)
+        self.key_hint.setOpenExternalLinks(True)
+        proxy_form.addRow("", self.key_hint)
+
+        # --- Model ---
+        self.model_input = QComboBox()
+        self.model_input.setEditable(True)   # chọn gợi ý hoặc tự gõ tên model
+        proxy_form.addRow("Model", self.model_input)
 
         # --- Địa chỉ proxy ---
         self.proxy_input = QLineEdit()
@@ -257,7 +267,7 @@ class MainWindow(QMainWindow):
         # "&&" vì Qt hiểu "&" đơn là ký tự phím tắt và nuốt nó đi.
         self.save_key_btn = QPushButton("Lưu key && khởi động lại server")
         self.save_key_btn.clicked.connect(self._save_and_restart_proxy)
-        self.test_btn = QPushButton("Kiểm tra kết nối")
+        self.test_btn = QPushButton("Kiểm tra kết nối Proxy && API")
         self.test_btn.clicked.connect(self._test_proxy)
         button_row.addWidget(self.save_key_btn)
         button_row.addWidget(self.test_btn)
@@ -434,11 +444,50 @@ class MainWindow(QMainWindow):
 
     def _apply_app_config(self) -> None:
         """config.ini thắng job đã lưu: đây là thứ người dùng nhập ở giao diện."""
-        self.api_key_input.setText(self.app_config.gemini_api_key)
+        self._select_data(self.provider_combo, self.app_config.provider)
+        self._load_provider_fields(self.app_config.provider)
         if self.app_config.proxy_url:
             self.proxy_input.setText(self.app_config.proxy_url)
         if self.app_config.license_key:
             self.license_input.setText(self.app_config.license_key)
+
+    def current_provider(self) -> str:
+        return self.provider_combo.currentData() or DEFAULT_PROVIDER
+
+    def _load_provider_fields(self, provider: str) -> None:
+        """Nạp key + model đã lưu của provider và cập nhật link lấy key."""
+        spec = TranslatorAgent.spec_for(provider)
+
+        self.api_key_label.setText(f"{spec.label} API key")
+        self.api_key_input.setText(self.app_config.api_key_for(provider))
+        self.api_key_input.setPlaceholderText(f"Dán {spec.env_key} vào đây")
+
+        self.model_input.blockSignals(True)
+        self.model_input.clear()
+        self.model_input.addItems(spec.models)
+        self.model_input.setCurrentText(self.app_config.model_for(provider))
+        self.model_input.blockSignals(False)
+
+        self.key_hint.setText(
+            f'Lấy key tại <a href="{spec.signup_url}" style="color:#4f8cff">'
+            f"{spec.signup_url}</a>. {spec.note}<br>"
+            "Key lưu vào <b>config.ini</b> cạnh app - mỗi nhà cung cấp một key riêng, "
+            "đổi qua lại không mất key cũ."
+        )
+
+    def _on_provider_changed(self) -> None:
+        """Lưu key/model của provider cũ trước khi nạp provider mới."""
+        previous = self.app_config.provider
+        if previous != self.current_provider():
+            self.app_config.set_api_key_for(previous, self.api_key_input.text().strip())
+            self.app_config.set_model_for(previous, self.model_input.currentText().strip())
+
+        self.app_config.provider = self.current_provider()
+        self._load_provider_fields(self.current_provider())
+        self.proxy_status.setText(
+            f'<span style="color:{MUTED}">Đã đổi nhà cung cấp - bấm '
+            "“Lưu key &amp;&amp; khởi động lại server” để áp dụng.</span>"
+        )
 
     def collect_config(self) -> JobConfig:
         return JobConfig(
@@ -518,8 +567,11 @@ class MainWindow(QMainWindow):
         self.show_key_btn.setText("Ẩn" if shown else "Hiện")
 
     def save_app_config(self) -> Path:
-        """Ghi API key / proxy / license xuống config.ini."""
-        self.app_config.gemini_api_key = self.api_key_input.text().strip()
+        """Ghi provider / API key / model / proxy / license xuống config.ini."""
+        provider = self.current_provider()
+        self.app_config.provider = provider
+        self.app_config.set_api_key_for(provider, self.api_key_input.text().strip())
+        self.app_config.set_model_for(provider, self.model_input.currentText().strip())
         self.app_config.proxy_url = self.proxy_input.text().strip()
         self.app_config.license_key = self.license_input.text().strip()
         return self.app_config.save()
@@ -564,6 +616,7 @@ class MainWindow(QMainWindow):
             lambda text: self.proxy_status.setText(f'<span style="color:{WARN}">{text}</span>')
         )
         self.proxy_worker.checked.connect(self._on_proxy_checked)
+        self.proxy_worker.checked.connect(self._show_proxy_dialog)
         self.proxy_worker.finished.connect(self._on_proxy_check_done)
         self.proxy_worker.start()
 
@@ -575,6 +628,47 @@ class MainWindow(QMainWindow):
             text += f'<br><span style="color:{MUTED}">{status.hint}</span>'
         self.proxy_status.setText(text)
         self._append_log(f"[Proxy] {status.code}: {status.full_text}")
+
+    def _show_proxy_dialog(self, status) -> None:
+        """Hộp thoại kết quả - nói rõ hỏng ở khâu nào và sửa thế nào.
+
+        Tách khỏi ``_on_proxy_checked`` vì hộp thoại modal chặn luồng: chỉ nối vào
+        tín hiệu trong luồng người dùng bấm nút, không chạy khi cập nhật trạng thái.
+        """
+        provider_label = TranslatorAgent.spec_for(self.current_provider()).label
+
+        if status.ok:
+            QMessageBox.information(
+                self, "Kết nối thành công",
+                f"{status.message}\n\nNhà cung cấp: {provider_label}\n"
+                f"Model: {self.model_input.currentText().strip()}",
+            )
+            return
+
+        titles = {
+            "no_url": "Chưa cấu hình proxy",
+            "unreachable": "Proxy chưa chạy",
+            "no_key": "Chưa có API key",
+            "bad_key": "API key sai",
+            "quota": "Hết hạn mức",
+            "bad_model": "Sai tên model",
+            "network": "Mất mạng",
+            "provider_down": "Nhà cung cấp đang lỗi",
+        }
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(titles.get(status.code, "Lỗi kết nối"))
+        box.setText(status.message)
+        if status.hint:
+            box.setInformativeText(status.hint)
+        box.setDetailedText(
+            f"Mã lỗi: {status.code}\n"
+            f"Nhà cung cấp: {provider_label}\n"
+            f"Model: {self.model_input.currentText().strip()}\n"
+            f"Proxy: {self.proxy_input.text().strip()}\n\n"
+            f"Log server gần nhất:\n{ProxyServerManager.instance().recent_logs(10) or '(trống)'}"
+        )
+        box.exec()
 
     def _on_proxy_check_done(self) -> None:
         self.save_key_btn.setEnabled(True)

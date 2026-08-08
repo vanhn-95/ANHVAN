@@ -72,10 +72,11 @@ class TranslatorClient:
             )
 
         # Lớp 2 - proxy có key chưa?
+        label = health.get("provider_label", "nhà cung cấp AI")
         if not health.get("api_key_configured"):
             return ProxyStatus(
                 False, "no_key",
-                "Proxy đang chạy nhưng chưa có GEMINI_API_KEY.",
+                f"Proxy đang chạy nhưng chưa có API key cho {label}.",
                 "Nhập API key vào ô bên trên rồi bấm Lưu để khởi động lại server.",
             )
 
@@ -93,18 +94,25 @@ class TranslatorClient:
         status = str(body.get("status", "error"))
         detail = str(body.get("detail", ""))
         model = str(body.get("model", ""))
+        provider = str(body.get("provider", ""))
+        label = str(body.get("provider_label", "nhà cung cấp AI"))
 
         if status == "ok":
-            return ProxyStatus(True, "ok", f"Kết nối tốt - Gemini phản hồi bình thường ({model}).")
+            return ProxyStatus(True, "ok", f"Kết nối tốt - {label} phản hồi bình thường ({model}).")
 
+        from .providers import PROVIDERS  # tránh import vòng ở đầu module
+
+        signup = PROVIDERS[provider].signup_url if provider in PROVIDERS else ""
         hints = {
-            "bad_key": "Lấy key mới tại https://aistudio.google.com/apikey",
-            "quota": "Chờ hạn mức reset hoặc dùng key khác.",
-            "bad_model": "Đổi model trong config.ini (mục [gemini] model).",
+            "bad_key": f"Lấy key mới tại {signup}" if signup else "Kiểm tra lại API key.",
+            "quota": "Chờ hạn mức reset, nạp thêm tiền, hoặc đổi sang nhà cung cấp khác.",
+            "bad_model": f"Đổi tên model ở ô Model (mặc định của {label} thường là an toàn nhất).",
             "network": "Kiểm tra mạng/firewall của máy chạy server.",
+            "provider_down": "Máy chủ nhà cung cấp đang lỗi - thử lại sau.",
             "no_key": "Nhập API key vào ô bên trên rồi bấm Lưu.",
         }
-        return ProxyStatus(False, status, detail or "Gemini không phản hồi.", hints.get(status, ""))
+        return ProxyStatus(False, status, detail or f"{label} không phản hồi.",
+                           hints.get(status, ""))
 
     def translate_segments(
         self,

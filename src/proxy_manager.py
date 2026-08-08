@@ -111,10 +111,12 @@ class ProxyServerManager:
                     f"Cài bằng: pip install {' '.join(missing)}",
                 )
 
+            provider = self.config.provider
             key = api_key if api_key is not None else self.config.effective_api_key()
             env = os.environ.copy()
-            env["GEMINI_API_KEY"] = key
-            env["GEMINI_MODEL"] = self.config.gemini_model
+            env["SUBAI_PROVIDER"] = provider
+            env["SUBAI_API_KEY"] = key
+            env["SUBAI_MODEL"] = self.config.model_for(provider)
             env["PYTHONUNBUFFERED"] = "1"
             env["PYTHONIOENCODING"] = "utf-8"
 

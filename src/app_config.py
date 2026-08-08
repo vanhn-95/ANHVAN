@@ -15,10 +15,12 @@ import stat
 from pathlib import Path
 from typing import Optional
 
+from .providers import DEFAULT_PROVIDER, PROVIDERS
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = Path(os.environ.get("SUBAI_CONFIG", PROJECT_ROOT / "config.ini"))
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = PROVIDERS[DEFAULT_PROVIDER].default_model
 DEFAULT_PROXY_URL = "http://127.0.0.1:8000"
 
 
@@ -28,11 +30,15 @@ class AppConfig:
     def __init__(self, path: Optional[Path] = None) -> None:
         self.path = Path(path) if path else CONFIG_FILE
         self._parser = configparser.ConfigParser()
-        self._parser.read_dict({
-            "gemini": {"api_key": "", "model": DEFAULT_MODEL},
+        defaults = {
+            "ai": {"provider": DEFAULT_PROVIDER},
             "proxy": {"url": DEFAULT_PROXY_URL, "auto_start": "true", "port": "8000"},
             "license": {"key": ""},
-        })
+        }
+        # Mỗi provider giữ key và model riêng, đổi provider không mất key cũ.
+        for name, spec in PROVIDERS.items():
+            defaults[name] = {"api_key": "", "model": spec.default_model}
+        self._parser.read_dict(defaults)
 
     # ------------------------------------------------------------------ đọc/ghi
     @classmethod
@@ -71,21 +77,55 @@ class AppConfig:
             self._parser.add_section(section)
         self._parser.set(section, option, value)
 
+    # ------------------------------------------------------- nhà cung cấp AI
+    @property
+    def provider(self) -> str:
+        name = self._get("ai", "provider", DEFAULT_PROVIDER).lower()
+        return name if name in PROVIDERS else DEFAULT_PROVIDER
+
+    @provider.setter
+    def provider(self, value: str) -> None:
+        self._set("ai", "provider", (value or DEFAULT_PROVIDER).strip().lower())
+
+    def api_key_for(self, provider: str) -> str:
+        return self._get(provider, "api_key")
+
+    def set_api_key_for(self, provider: str, value: str) -> None:
+        self._set(provider, "api_key", (value or "").strip())
+
+    def model_for(self, provider: str) -> str:
+        spec = PROVIDERS.get(provider)
+        fallback = spec.default_model if spec else DEFAULT_MODEL
+        return self._get(provider, "model", fallback) or fallback
+
+    def set_model_for(self, provider: str, value: str) -> None:
+        self._set(provider, "model", (value or "").strip())
+
+    @property
+    def api_key(self) -> str:
+        """Key của provider đang chọn."""
+        return self.api_key_for(self.provider)
+
+    @property
+    def model(self) -> str:
+        return self.model_for(self.provider)
+
+    # Giữ tên cũ để code/tài liệu cũ không gãy.
     @property
     def gemini_api_key(self) -> str:
-        return self._get("gemini", "api_key")
+        return self.api_key_for("gemini")
 
     @gemini_api_key.setter
     def gemini_api_key(self, value: str) -> None:
-        self._set("gemini", "api_key", (value or "").strip())
+        self.set_api_key_for("gemini", value)
 
     @property
     def gemini_model(self) -> str:
-        return self._get("gemini", "model", DEFAULT_MODEL) or DEFAULT_MODEL
+        return self.model_for("gemini")
 
     @gemini_model.setter
     def gemini_model(self, value: str) -> None:
-        self._set("gemini", "model", value)
+        self.set_model_for("gemini", value)
 
     @property
     def proxy_url(self) -> str:
@@ -123,9 +163,12 @@ class AppConfig:
         self._set("license", "key", (value or "").strip())
 
     # ------------------------------------------------------------------ tiện ích
-    def effective_api_key(self) -> str:
+    def effective_api_key(self, provider: Optional[str] = None) -> str:
         """Key dùng thật: config.ini trước, sau đó mới tới .env / biến môi trường."""
-        return self.gemini_api_key or os.environ.get("GEMINI_API_KEY", "").strip()
+        provider = provider or self.provider
+        spec = PROVIDERS.get(provider)
+        env_value = os.environ.get(spec.env_key, "").strip() if spec else ""
+        return self.api_key_for(provider) or env_value
 
     def has_api_key(self) -> bool:
         return bool(self.effective_api_key())

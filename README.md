@@ -13,7 +13,7 @@ nhái giọng gốc → render video hoàn chỉnh. Tất cả chạy trong mộ
 | Tải video đa nền tảng (YouTube, TikTok, Douyin, Bilibili…) | `yt-dlp` |
 | Tách vocal / nhạc nền để ASR chính xác hơn | Demucs HTDemucs v4 |
 | Trích xuất phụ đề tốc độ cao, lọc khoảng lặng | Faster-Whisper + Silero VAD |
-| Dịch giữ văn phong, không lệch số dòng | Gemini 2.5 Flash qua Proxy Server |
+| Dịch giữ văn phong, không lệch số dòng | **Gemini / ChatGPT / DeepSeek** qua Proxy Server |
 | Lồng tiếng nhái giọng nhân vật gốc, khớp mốc thời gian | XTTS-v2 + time-stretch |
 | Auto-ducking: hạ nhạc nền khi có lời thoại | FFmpeg `sidechaincompress` |
 | Khoá bản quyền theo máy | HWID + chữ ký RSA-PSS |
@@ -29,8 +29,8 @@ Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi
 Script tự tạo venv, cài thư viện, **tự bật server dịch thuật ngầm** rồi mở app —
 không cần mở thêm cửa sổ CMD nào. Gặp lỗi thì chạy `python check_setup.py`.
 
-API key Gemini nhập thẳng trong app (tab **Tuỳ chỉnh nâng cao**), lưu vào `config.ini`
-nên chỉ phải nhập một lần:
+Chọn nhà cung cấp AI và nhập API key ngay trong app (tab **Tuỳ chỉnh nâng cao**), lưu vào
+`config.ini` nên chỉ phải nhập một lần — mỗi nhà cung cấp giữ key riêng:
 
 ![Nhập API key](docs/screenshot-apikey.png)
 
@@ -56,7 +56,6 @@ pip install torch torchaudio torchvision --index-url https://download.pytorch.or
 
 pip install -r requirements.txt
 
-cp .env.example .env            # rồi điền GEMINI_API_KEY nếu chạy proxy trên máy này
 ```
 
 Chỉ muốn mở giao diện để xem trước, chưa cài engine AI nặng:
@@ -80,11 +79,19 @@ python run_desktop.py           # hoặc: python -m desktop
 
 `run_desktop.py` tự bật Proxy Server dịch thuật bằng `subprocess` (trên Windows không
 bung cửa sổ console) và tự tắt khi bạn đóng app. Lần đầu mở, vào tab **Tuỳ chỉnh nâng
-cao** → dán **Gemini API key** → bấm **Lưu key && khởi động lại server**. Key được ghi
-vào `config.ini`, lần sau tự điền lại.
+cao** → chọn **Nhà cung cấp AI** → dán **API key** → chọn/gõ **Model** → bấm
+**Lưu key && khởi động lại server**. Key được ghi vào `config.ini` theo từng nhà cung
+cấp, lần sau tự điền lại.
 
-Nút **Kiểm tra kết nối** phân biệt rõ từng nguyên nhân: proxy chưa chạy, proxy chạy
-nhưng chưa có key, key sai, key hết quota, model không tồn tại, hay lỗi mạng.
+| Nhà cung cấp | Model mặc định | Lấy key |
+|---|---|---|
+| Google Gemini | `gemini-2.5-flash` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| ChatGPT (OpenAI) | `gpt-4o-mini` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| DeepSeek | `deepseek-chat` | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) |
+
+Nút **Kiểm tra kết nối Proxy & API** hiện hộp thoại phân biệt rõ từng nguyên nhân: proxy
+chưa chạy, proxy chạy nhưng chưa có key, key sai, key hết quota, model không tồn tại, mất
+mạng, hay nhà cung cấp đang lỗi.
 
 ### 2. Chạy Proxy Server riêng (tuỳ chọn)
 
@@ -127,7 +134,8 @@ python -m src.main_pipeline video.mp4 --no-dub --burn      # chỉ phụ đề, 
 ```
 desktop/     Giao diện PySide6 (app, cửa sổ chính, worker thread, theme, env check)
 src/         Pipeline: downloader → separator → ASR → translator → TTS → composer
-server/      FastAPI proxy giữ API key Gemini
+             providers.py: factory đa nhà cung cấp AI (Gemini/OpenAI/DeepSeek)
+server/      FastAPI proxy giữ API key, gọi provider qua factory
 tools/       Công cụ phát hành license (keygen / issue)
 packaging/   PyInstaller spec để build bản .exe / .app
 ```

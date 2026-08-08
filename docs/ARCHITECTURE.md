@@ -110,3 +110,37 @@ trong `src/__init__.py` và `server/__init__.py`, tức là **trước** khi `co
 `security_guard.py` đọc `os.environ` ở cấp module — nếu nạp muộn hơn thì các giá trị mặc
 định đã bị "đóng băng" mất rồi. Biến môi trường có sẵn trong shell luôn thắng file `.env`,
 nên `GEMINI_API_KEY=xxx uvicorn ...` vẫn đè được lên file khi cần.
+
+## 8. Đa nhà cung cấp AI (Factory Pattern)
+
+`src/providers.py` là nơi duy nhất biết về từng hãng AI:
+
+```
+TranslatorAgent (ABC)
+├── complete(prompt)          ← mỗi hãng tự cài đặt
+├── translate_lines(...)      ← dùng chung: dựng prompt, đếm dòng, vá dòng thiếu
+├── verify()                  ← dùng chung: gọi thử, trả (mã, mô tả)
+└── create(provider, key, model)   ← FACTORY
+
+OpenAIAgent      → https://api.openai.com/v1/chat/completions
+└── DeepSeekAgent → https://api.deepseek.com/v1  (kế thừa: cùng giao thức)
+GeminiAgent      → https://generativelanguage.googleapis.com/v1beta
+```
+
+Ba quyết định đáng chú ý:
+
+**Gọi REST trực tiếp, không dùng SDK từng hãng.** Thêm provider mới không kéo theo
+dependency mới, không dính xung đột phiên bản giữa các SDK, và bản PyInstaller không phình
+thêm. Đổi lại phải tự dựng payload — chi phí nhỏ vì cả ba đều là JSON phẳng.
+
+**DeepSeek kế thừa `OpenAIAgent`**, chỉ đổi `base_url`. DeepSeek cố tình làm API tương
+thích OpenAI nên viết lại là thừa.
+
+**Phân loại lỗi dùng chung** (`classify_http_error`): 401/403 → `bad_key`, 429/402 →
+`quota`, 404 → `bad_model`, 5xx → `provider_down`, lỗi socket → `network`. Body được soi
+thêm vì có hãng trả 400 kèm `API_KEY_INVALID` thay vì 401. Nhờ vậy giao diện chỉ cần xử lý
+một tập mã lỗi, không cần biết đang nói chuyện với hãng nào.
+
+Provider/key/model đi từ `config.ini` → biến môi trường của tiến trình con
+(`SUBAI_PROVIDER`, `SUBAI_API_KEY`, `SUBAI_MODEL`) → server đọc lại **ở mỗi lần gọi**. Vì
+vậy đổi nhà cung cấp chỉ cần restart tiến trình server, không phải sửa code.

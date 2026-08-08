@@ -145,7 +145,7 @@ class TestDiagnose:
         assert manager.start("").ok
         status = TranslatorClient(manager.url).diagnose()
         assert status.code == "no_key"
-        assert "chưa có GEMINI_API_KEY" in status.message
+        assert "chưa có API key" in status.message
 
     @needs_server
     def test_bad_key_detected_through_the_stack(self, manager):

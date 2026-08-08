@@ -196,3 +196,132 @@ class TestApiKeyUi:
         window._refresh_server_status()
         assert "Đã tắt" in window.server_status.text()
         assert window.server_toggle_btn.text() == "Bật server"
+
+
+class TestProviderUi:
+    def test_combo_lists_all_providers(self, window):
+        from src.providers import PROVIDERS
+
+        names = {window.provider_combo.itemData(i)
+                 for i in range(window.provider_combo.count())}
+        assert names == set(PROVIDERS)
+
+    def test_switching_provider_loads_its_defaults(self, window):
+        window._select_data(window.provider_combo, "openai")
+        assert window.current_provider() == "openai"
+        assert window.model_input.currentText() == "gpt-4o-mini"
+        assert "platform.openai.com" in window.key_hint.text()
+
+        window._select_data(window.provider_combo, "deepseek")
+        assert window.model_input.currentText() == "deepseek-chat"
+        assert "deepseek.com" in window.key_hint.text()
+
+    def test_each_provider_keeps_its_own_key(self, window, tmp_path):
+        window.app_config.path = tmp_path / "config.ini"
+
+        window._select_data(window.provider_combo, "openai")
+        window.api_key_input.setText("sk-openai-key")
+
+        window._select_data(window.provider_combo, "deepseek")
+        assert window.api_key_input.text() == ""      # không lẫn key của nhau
+        window.api_key_input.setText("sk-deepseek-key")
+
+        window._select_data(window.provider_combo, "openai")
+        assert window.api_key_input.text() == "sk-openai-key"
+
+        window.save_app_config()
+        from src.app_config import AppConfig
+
+        saved = AppConfig.load(tmp_path / "config.ini")
+        assert saved.api_key_for("openai") == "sk-openai-key"
+        assert saved.api_key_for("deepseek") == "sk-deepseek-key"
+
+    def test_custom_model_is_saved(self, window, tmp_path):
+        window.app_config.path = tmp_path / "config.ini"
+        window._select_data(window.provider_combo, "openai")
+        window.model_input.setCurrentText("gpt-4.1-mini")
+        window.save_app_config()
+
+        from src.app_config import AppConfig
+
+        assert AppConfig.load(tmp_path / "config.ini").model_for("openai") == "gpt-4.1-mini"
+
+    def test_provider_persists_across_restart(self, app, tmp_path, monkeypatch):
+        from src.app_config import AppConfig
+
+        config = AppConfig.load(tmp_path / "config.ini")
+        config.provider = "deepseek"
+        config.set_api_key_for("deepseek", "sk-ds")
+        config.set_model_for("deepseek", "deepseek-reasoner")
+        config.save()
+
+        monkeypatch.setattr("src.config.SETTINGS_FILE", tmp_path / "settings.json")
+        monkeypatch.setattr("src.app_config.CONFIG_FILE", tmp_path / "config.ini")
+
+        fresh = MainWindow()
+        try:
+            assert fresh.current_provider() == "deepseek"
+            assert fresh.api_key_input.text() == "sk-ds"
+            assert fresh.model_input.currentText() == "deepseek-reasoner"
+        finally:
+            fresh.deleteLater()
+
+    def test_model_combo_is_editable(self, window):
+        assert window.model_input.isEditable()
+
+
+class TestConnectionDialog:
+    def test_success_shows_information_dialog(self, window, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        from src.translator import ProxyStatus
+
+        shown = {}
+        monkeypatch.setattr(
+            QMessageBox, "information",
+            lambda parent, title, text, *a, **k: shown.update(title=title, text=text),
+        )
+        window._show_proxy_dialog(ProxyStatus(True, "ok", "Kết nối tốt."))
+        assert shown["title"] == "Kết nối thành công"
+        assert "Kết nối tốt." in shown["text"]
+
+    @pytest.mark.parametrize("code,title", [
+        ("bad_key", "API key sai"),
+        ("unreachable", "Proxy chưa chạy"),
+        ("network", "Mất mạng"),
+        ("quota", "Hết hạn mức"),
+        ("bad_model", "Sai tên model"),
+        ("no_key", "Chưa có API key"),
+    ])
+    def test_failure_titles(self, window, monkeypatch, code, title):
+        from PySide6.QtWidgets import QMessageBox
+        from src.translator import ProxyStatus
+
+        captured = {}
+        monkeypatch.setattr(QMessageBox, "exec", lambda self: captured.update(
+            title=self.windowTitle(), text=self.text(), detail=self.detailedText()
+        ))
+        window._show_proxy_dialog(ProxyStatus(False, code, "Có lỗi.", "Gợi ý sửa."))
+        assert captured["title"] == title
+        assert "Có lỗi." in captured["text"]
+        assert code in captured["detail"]
+
+    def test_dialog_not_shown_when_only_updating_status(self, window, monkeypatch):
+        """_on_proxy_checked chỉ cập nhật nhãn - hộp thoại modal sẽ treo test."""
+        from PySide6.QtWidgets import QMessageBox
+        from src.translator import ProxyStatus
+
+        calls = []
+        monkeypatch.setattr(QMessageBox, "exec", lambda self: calls.append(1))
+        monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: calls.append(1))
+
+        window._on_proxy_checked(ProxyStatus(False, "bad_key", "Sai key."))
+        assert calls == []
+        assert "Sai key." in window.proxy_status.text()
+
+    def test_key_label_follows_provider(self, window):
+        window._select_data(window.provider_combo, "openai")
+        assert "OpenAI" in window.api_key_label.text()
+        assert "OPENAI_API_KEY" in window.api_key_input.placeholderText()
+
+        window._select_data(window.provider_combo, "gemini")
+        assert "Gemini" in window.api_key_label.text()

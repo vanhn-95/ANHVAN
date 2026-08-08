@@ -9,6 +9,7 @@ pytest.importorskip("fastapi")
 from fastapi import HTTPException  # noqa: E402
 
 from server import proxy_server  # noqa: E402
+from src.providers import classify_http_error  # noqa: E402
 
 
 class TestParseNumbered:
@@ -53,52 +54,93 @@ class TestHealth:
         assert "model" in body
 
 
-class TestClassifyGeminiError:
-    def test_invalid_key(self):
-        code, message = proxy_server.classify_gemini_error(
-            Exception("400 INVALID_ARGUMENT: API_KEY_INVALID")
-        )
+class TestClassifyHttpError:
+    """Phân loại lỗi giờ dùng chung cho cả 3 nhà cung cấp."""
+
+    def test_401_is_bad_key(self):
+        code, message = classify_http_error(401, "Unauthorized")
         assert code == "bad_key"
         assert "không hợp lệ" in message
 
-    def test_unauthenticated(self):
-        code, _ = proxy_server.classify_gemini_error(Exception("401 Unauthenticated"))
-        assert code == "bad_key"
+    def test_403_is_bad_key(self):
+        assert classify_http_error(403, "Forbidden")[0] == "bad_key"
 
-    def test_quota(self):
-        code, message = proxy_server.classify_gemini_error(
-            Exception("429 RESOURCE_EXHAUSTED: quota exceeded")
-        )
+    def test_gemini_api_key_invalid_body(self):
+        assert classify_http_error(400, '{"error":{"status":"API_KEY_INVALID"}}')[0] == "bad_key"
+
+    def test_openai_incorrect_key_body(self):
+        assert classify_http_error(400, "Incorrect API key provided")[0] == "bad_key"
+
+    def test_429_is_quota(self):
+        code, message = classify_http_error(429, "Too Many Requests")
         assert code == "quota"
         assert "quota" in message.lower()
 
-    def test_bad_model(self):
-        code, _ = proxy_server.classify_gemini_error(Exception("404 model not found"))
-        assert code == "bad_model"
+    def test_insufficient_quota_body(self):
+        assert classify_http_error(400, '{"code":"insufficient_quota"}')[0] == "quota"
 
-    def test_network(self):
-        code, _ = proxy_server.classify_gemini_error(TimeoutError("connection timeout"))
-        assert code == "network"
+    def test_deepseek_insufficient_balance(self):
+        assert classify_http_error(402, "Insufficient Balance")[0] == "quota"
 
-    def test_unknown_falls_back(self):
-        code, message = proxy_server.classify_gemini_error(Exception("chuyện lạ"))
+    def test_404_is_bad_model(self):
+        assert classify_http_error(404, "not found")[0] == "bad_model"
+
+    def test_model_not_found_body(self):
+        assert classify_http_error(400, '{"code":"model_not_found"}')[0] == "bad_model"
+
+    def test_5xx_is_provider_down(self):
+        code, message = classify_http_error(503, "Service Unavailable")
+        assert code == "provider_down"
+        assert "503" in message
+
+    def test_unknown_keeps_body(self):
+        code, message = classify_http_error(418, "chuyện lạ")
         assert code == "error"
         assert "chuyện lạ" in message
 
 
-class TestVerifyEndpoint:
+class TestHealthAndVerify:
     def test_no_key_reported(self, monkeypatch):
+        monkeypatch.delenv("SUBAI_API_KEY", raising=False)
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        body = proxy_server.verify()
-        assert body["status"] == "no_key"
+        assert proxy_server.verify()["status"] == "no_key"
 
     def test_health_reflects_runtime_key(self, monkeypatch):
-        monkeypatch.setenv("GEMINI_API_KEY", "abc")
+        monkeypatch.setenv("SUBAI_API_KEY", "abc")
         assert proxy_server.health()["api_key_configured"] is True
 
-        monkeypatch.setenv("GEMINI_API_KEY", "")
+        monkeypatch.setenv("SUBAI_API_KEY", "")
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         assert proxy_server.health()["api_key_configured"] is False
 
     def test_model_read_at_call_time(self, monkeypatch):
-        monkeypatch.setenv("GEMINI_MODEL", "gemini-3-test")
+        monkeypatch.setenv("SUBAI_MODEL", "gemini-3-test")
         assert proxy_server.health()["model"] == "gemini-3-test"
+
+    def test_provider_switching(self, monkeypatch):
+        monkeypatch.delenv("SUBAI_MODEL", raising=False)
+        monkeypatch.setenv("SUBAI_PROVIDER", "deepseek")
+        body = proxy_server.health()
+        assert body["provider"] == "deepseek"
+        assert body["model"] == "deepseek-chat"
+        assert body["provider_label"] == "DeepSeek"
+
+    def test_unknown_provider_falls_back_to_gemini(self, monkeypatch):
+        monkeypatch.setenv("SUBAI_PROVIDER", "khong-ton-tai")
+        assert proxy_server.health()["provider"] == "gemini"
+
+    def test_provider_specific_env_key_accepted(self, monkeypatch):
+        monkeypatch.delenv("SUBAI_API_KEY", raising=False)
+        monkeypatch.setenv("SUBAI_PROVIDER", "openai")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        assert proxy_server.health()["api_key_configured"] is True
+
+    def test_build_agent_matches_provider(self, monkeypatch):
+        monkeypatch.setenv("SUBAI_PROVIDER", "openai")
+        monkeypatch.setenv("SUBAI_API_KEY", "sk-test")
+        monkeypatch.setenv("SUBAI_MODEL", "gpt-4o")
+
+        agent = proxy_server.build_agent()
+        assert agent.spec.name == "openai"
+        assert agent.model == "gpt-4o"
+        assert agent.api_key == "sk-test"
