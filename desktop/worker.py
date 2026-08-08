@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import QThread, Signal
 
+from typing import Optional
+
 from src.config import JobConfig
 from src.main_pipeline import Pipeline, PipelineResult
 from src.progress import ProgressReporter
+from src.proxy_manager import ProxyServerManager
+from src.translator import ProxyStatus, TranslatorClient
 from src.utils import CancelledError, PipelineError
 
 
@@ -44,3 +48,43 @@ class PipelineWorker(QThread):
             self.failed.emit(f"Lỗi không mong đợi: {exc.__class__.__name__}: {exc}")
         else:
             self.succeeded.emit(result)
+
+
+class ProxyCheckWorker(QThread):
+    """Khởi động lại server nhúng và/hoặc kiểm tra kết nối, ở thread nền.
+
+    Bước verify gọi thẳng Gemini nên có thể mất vài giây - chạy trên UI thread
+    sẽ làm cửa sổ đơ.
+    """
+
+    checked = Signal(object)     # ProxyStatus
+    note = Signal(str)           # thông báo tiến trình cho người dùng
+
+    def __init__(
+        self,
+        proxy_url: str,
+        license_key: str = "",
+        restart_with_key: Optional[str] = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.proxy_url = proxy_url
+        self.license_key = license_key
+        self.restart_with_key = restart_with_key
+
+    def run(self) -> None:
+        if self.restart_with_key is not None:
+            self.note.emit("Đang khởi động lại server dịch thuật...")
+            result = ProxyServerManager.instance().restart(self.restart_with_key)
+            if not result.ok:
+                self.checked.emit(
+                    ProxyStatus(False, "unreachable", "Không bật được server nhúng.", result.message)
+                )
+                return
+
+        self.note.emit("Đang kiểm tra API key với Gemini...")
+        try:
+            status = TranslatorClient(self.proxy_url, self.license_key).diagnose()
+        except Exception as exc:
+            status = ProxyStatus(False, "error", "Lỗi khi kiểm tra.", f"{exc.__class__.__name__}: {exc}")
+        self.checked.emit(status)

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.app_config import AppConfig
 from src.config import (
     APP_NAME,
     COMPUTE_TYPES,
@@ -46,12 +47,12 @@ from src.config import (
     JobConfig,
 )
 from src.main_pipeline import PipelineResult, plan_stages
+from src.proxy_manager import ProxyServerManager
 from src.security_guard import get_hwid, verify_license
-from src.translator import TranslatorClient
 
 from desktop.environment import blocking_problems, run_checks
-from desktop.theme import DANGER, OK, WARN
-from desktop.worker import PipelineWorker
+from desktop.theme import DANGER, MUTED, OK, WARN
+from desktop.worker import PipelineWorker, ProxyCheckWorker
 
 VIDEO_FILTER = "Video (*.mp4 *.mkv *.mov *.avi *.webm *.flv);;Tất cả file (*)"
 
@@ -70,7 +71,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.settings = AppSettings.load()
+        self.app_config = AppConfig.load()
         self.worker: Optional[PipelineWorker] = None
+        self.proxy_worker: Optional[ProxyCheckWorker] = None
         self.last_result: Optional[PipelineResult] = None
 
         self.setWindowTitle(f"{APP_NAME} - Lồng tiếng & phụ đề AI")
@@ -94,8 +97,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         self._apply_config(self.settings.last_job)
+        self._apply_app_config()
         self._refresh_environment()
         self._refresh_license()
+        self._refresh_server_status()
 
     # ------------------------------------------------------------- xây dựng UI
     def _build_header(self) -> QWidget:
@@ -215,22 +220,67 @@ class MainWindow(QMainWindow):
         asr_form.addRow("Thiết bị", self.device_combo)
         asr_form.addRow("Kiểu tính toán", self.compute_combo)
         asr_form.addRow("", self.chk_vad)
-        layout.addWidget(asr_box)
 
-        proxy_box = QGroupBox("Proxy Server dịch thuật")
+        proxy_box = QGroupBox("Dịch thuật AI (Gemini)")
         proxy_form = QFormLayout(proxy_box)
+
+        # --- API key ---
+        key_row = QHBoxLayout()
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        self.api_key_input.setPlaceholderText("Dán GEMINI_API_KEY vào đây")
+        self.show_key_btn = QPushButton("Hiện")
+        self.show_key_btn.setCheckable(True)
+        self.show_key_btn.setFixedWidth(64)
+        self.show_key_btn.toggled.connect(self._toggle_key_visibility)
+        key_row.addWidget(self.api_key_input)
+        key_row.addWidget(self.show_key_btn)
+        proxy_form.addRow("Gemini API key", key_row)
+
+        key_hint = QLabel(
+            'Lấy key miễn phí tại <a href="https://aistudio.google.com/apikey" '
+            'style="color:#4f8cff">aistudio.google.com/apikey</a>. '
+            "Key được lưu vào <b>config.ini</b> cạnh app, lần sau không phải nhập lại."
+        )
+        key_hint.setObjectName("subtitle")
+        key_hint.setWordWrap(True)
+        key_hint.setOpenExternalLinks(True)
+        proxy_form.addRow("", key_hint)
+
+        # --- Địa chỉ proxy ---
         self.proxy_input = QLineEdit()
         self.proxy_input.setPlaceholderText("http://127.0.0.1:8000")
-        test_row = QHBoxLayout()
-        test_btn = QPushButton("Kiểm tra kết nối")
-        test_btn.clicked.connect(self._test_proxy)
+        proxy_form.addRow("Địa chỉ proxy", self.proxy_input)
+
+        # --- Nút hành động ---
+        button_row = QHBoxLayout()
+        # "&&" vì Qt hiểu "&" đơn là ký tự phím tắt và nuốt nó đi.
+        self.save_key_btn = QPushButton("Lưu key && khởi động lại server")
+        self.save_key_btn.clicked.connect(self._save_and_restart_proxy)
+        self.test_btn = QPushButton("Kiểm tra kết nối")
+        self.test_btn.clicked.connect(self._test_proxy)
+        button_row.addWidget(self.save_key_btn)
+        button_row.addWidget(self.test_btn)
+        button_row.addStretch(1)
+        proxy_form.addRow("", button_row)
+
         self.proxy_status = QLabel("Chưa kiểm tra")
         self.proxy_status.setObjectName("subtitle")
-        test_row.addWidget(test_btn)
-        test_row.addWidget(self.proxy_status, stretch=1)
-        proxy_form.addRow("Địa chỉ", self.proxy_input)
-        proxy_form.addRow("", test_row)
+        self.proxy_status.setWordWrap(True)
+        proxy_form.addRow("Trạng thái", self.proxy_status)
+
+        # --- Server nhúng ---
+        server_row = QHBoxLayout()
+        self.server_status = QLabel("Đang kiểm tra...")
+        self.server_status.setObjectName("subtitle")
+        self.server_toggle_btn = QPushButton("Tắt server")
+        self.server_toggle_btn.setFixedWidth(120)
+        self.server_toggle_btn.clicked.connect(self._toggle_server)
+        server_row.addWidget(self.server_status, stretch=1)
+        server_row.addWidget(self.server_toggle_btn)
+        proxy_form.addRow("Server nhúng", server_row)
         layout.addWidget(proxy_box)
+        layout.addWidget(asr_box)
 
         dub_box = QGroupBox("Lồng tiếng")
         dub_form = QFormLayout(dub_box)
@@ -382,6 +432,14 @@ class MainWindow(QMainWindow):
         self.chk_keep.setChecked(config.keep_intermediates)
         self._sync_dependencies()
 
+    def _apply_app_config(self) -> None:
+        """config.ini thắng job đã lưu: đây là thứ người dùng nhập ở giao diện."""
+        self.api_key_input.setText(self.app_config.gemini_api_key)
+        if self.app_config.proxy_url:
+            self.proxy_input.setText(self.app_config.proxy_url)
+        if self.app_config.license_key:
+            self.license_input.setText(self.app_config.license_key)
+
     def collect_config(self) -> JobConfig:
         return JobConfig(
             source=self.source_input.text().strip(),
@@ -454,16 +512,102 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(self.hwid_field.text())
         self.statusBar().showMessage("Đã sao chép HWID.", 3000)
 
+    # ---------------------------------------------------- API key & proxy server
+    def _toggle_key_visibility(self, shown: bool) -> None:
+        self.api_key_input.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
+        self.show_key_btn.setText("Ẩn" if shown else "Hiện")
+
+    def save_app_config(self) -> Path:
+        """Ghi API key / proxy / license xuống config.ini."""
+        self.app_config.gemini_api_key = self.api_key_input.text().strip()
+        self.app_config.proxy_url = self.proxy_input.text().strip()
+        self.app_config.license_key = self.license_input.text().strip()
+        return self.app_config.save()
+
+    def _save_and_restart_proxy(self) -> None:
+        key = self.api_key_input.text().strip()
+        if not key:
+            answer = QMessageBox.question(
+                self, "Chưa có API key",
+                "Ô API key đang trống nên bước dịch sẽ không chạy được.\n\nVẫn lưu?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        path = self.save_app_config()
+        self._append_log(f"Đã lưu cấu hình vào {path}")
+        self._start_proxy_check(restart_with_key=key)
+
     def _test_proxy(self) -> None:
-        url = self.proxy_input.text().strip()
-        if not url:
-            self.proxy_status.setText("Chưa nhập địa chỉ.")
+        if not self.proxy_input.text().strip():
+            self.proxy_status.setText(
+                f'<span style="color:{DANGER}">Chưa nhập địa chỉ proxy.</span>'
+            )
             return
+        self._start_proxy_check(restart_with_key=None)
+
+    def _start_proxy_check(self, restart_with_key: Optional[str]) -> None:
+        if self.proxy_worker and self.proxy_worker.isRunning():
+            return
+
+        self.save_key_btn.setEnabled(False)
+        self.test_btn.setEnabled(False)
         self.proxy_status.setText("Đang kiểm tra...")
-        ok = TranslatorClient(url, self.license_input.text().strip()).health()
-        color = OK if ok else DANGER
-        message = "Kết nối tốt" if ok else "Không kết nối được"
-        self.proxy_status.setText(f'<span style="color:{color}">{message}</span>')
+
+        self.proxy_worker = ProxyCheckWorker(
+            self.proxy_input.text().strip(),
+            self.license_input.text().strip(),
+            restart_with_key,
+            self,
+        )
+        self.proxy_worker.note.connect(
+            lambda text: self.proxy_status.setText(f'<span style="color:{WARN}">{text}</span>')
+        )
+        self.proxy_worker.checked.connect(self._on_proxy_checked)
+        self.proxy_worker.finished.connect(self._on_proxy_check_done)
+        self.proxy_worker.start()
+
+    def _on_proxy_checked(self, status) -> None:
+        color = OK if status.ok else DANGER
+        icon = "✅" if status.ok else "❌"
+        text = f'<span style="color:{color}">{icon} {status.message}</span>'
+        if status.hint:
+            text += f'<br><span style="color:{MUTED}">{status.hint}</span>'
+        self.proxy_status.setText(text)
+        self._append_log(f"[Proxy] {status.code}: {status.full_text}")
+
+    def _on_proxy_check_done(self) -> None:
+        self.save_key_btn.setEnabled(True)
+        self.test_btn.setEnabled(True)
+        self.proxy_worker = None
+        self._refresh_server_status()
+
+    def _refresh_server_status(self) -> None:
+        manager = ProxyServerManager.instance()
+        if manager.is_running():
+            self.server_status.setText(
+                f'<span style="color:{OK}">Đang chạy ngầm (PID {manager.process.pid})</span>'
+            )
+            self.server_toggle_btn.setText("Tắt server")
+        elif manager.is_healthy():
+            self.server_status.setText(
+                f'<span style="color:{OK}">Có server ngoài đang chạy ở {manager.url}</span>'
+            )
+            self.server_toggle_btn.setText("Bật server")
+        else:
+            self.server_status.setText(f'<span style="color:{MUTED}">Đã tắt</span>')
+            self.server_toggle_btn.setText("Bật server")
+
+    def _toggle_server(self) -> None:
+        manager = ProxyServerManager.instance()
+        if manager.is_running():
+            manager.stop()
+            self._append_log("Đã tắt server dịch thuật.")
+        else:
+            self.server_status.setText("Đang bật...")
+            result = manager.start(self.api_key_input.text().strip())
+            self._append_log(f"[Server] {result.message}")
+        self._refresh_server_status()
 
     def _refresh_license(self) -> None:
         info = verify_license(self.license_input.text().strip())
@@ -597,8 +741,15 @@ class MainWindow(QMainWindow):
             self.worker.cancel()
             self.worker.wait(5000)
 
+        if self.proxy_worker and self.proxy_worker.isRunning():
+            self.proxy_worker.wait(3000)
+
         self.settings.last_job = self.collect_config()
         self.settings.save()
+        self.save_app_config()
+
+        # Tắt server nhúng để không còn tiến trình uvicorn mồ côi sau khi đóng app.
+        ProxyServerManager.instance().stop()
         event.accept()
 
 

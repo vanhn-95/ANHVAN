@@ -22,7 +22,9 @@ def app():
 
 @pytest.fixture
 def window(app, tmp_path, monkeypatch):
+    # Trỏ mọi file cấu hình vào tmp_path để test không đụng config thật của máy.
     monkeypatch.setattr("src.config.SETTINGS_FILE", tmp_path / "settings.json")
+    monkeypatch.setattr("src.app_config.CONFIG_FILE", tmp_path / "config.ini")
     win = MainWindow()
     yield win
     win.deleteLater()
@@ -117,3 +119,80 @@ class TestEnvironmentChecks:
         assert not check.ok
         assert "binary" in check.detail
         assert "atempo" in check.detail
+
+
+class TestApiKeyUi:
+    def test_api_key_hidden_by_default(self, window):
+        from PySide6.QtWidgets import QLineEdit
+
+        assert window.api_key_input.echoMode() == QLineEdit.Password
+
+    def test_show_button_reveals_key(self, window):
+        from PySide6.QtWidgets import QLineEdit
+
+        window.show_key_btn.setChecked(True)
+        assert window.api_key_input.echoMode() == QLineEdit.Normal
+        assert window.show_key_btn.text() == "Ẩn"
+
+        window.show_key_btn.setChecked(False)
+        assert window.api_key_input.echoMode() == QLineEdit.Password
+
+    def test_saving_writes_config_ini(self, window, tmp_path):
+        window.app_config.path = tmp_path / "config.ini"
+        window.api_key_input.setText("AIza-key-test")
+        window.proxy_input.setText("http://127.0.0.1:8123")
+
+        path = window.save_app_config()
+        assert path.exists()
+
+        from src.app_config import AppConfig
+
+        reloaded = AppConfig.load(path)
+        assert reloaded.gemini_api_key == "AIza-key-test"
+        assert reloaded.proxy_url == "http://127.0.0.1:8123"
+
+    def test_config_ini_populates_fields_on_open(self, app, tmp_path, monkeypatch):
+        """Key đã lưu phải tự điền lại ở lần mở app sau."""
+        from src.app_config import AppConfig
+
+        config = AppConfig.load(tmp_path / "config.ini")
+        config.gemini_api_key = "key-da-luu"
+        config.proxy_url = "http://10.1.2.3:8000"
+        config.save()
+
+        monkeypatch.setattr("src.config.SETTINGS_FILE", tmp_path / "settings.json")
+        monkeypatch.setattr("src.app_config.CONFIG_FILE", tmp_path / "config.ini")
+
+        fresh = MainWindow()
+        try:
+            assert fresh.api_key_input.text() == "key-da-luu"
+            assert fresh.proxy_input.text() == "http://10.1.2.3:8000"
+        finally:
+            fresh.deleteLater()
+
+    def test_empty_proxy_url_blocks_check(self, window):
+        window.proxy_input.setText("")
+        window._test_proxy()
+        assert "Chưa nhập địa chỉ" in window.proxy_status.text()
+        assert window.proxy_worker is None
+
+    def test_status_rendering_for_failure(self, window):
+        from src.translator import ProxyStatus
+
+        window._on_proxy_checked(ProxyStatus(False, "bad_key", "Key sai.", "Lấy key mới."))
+        text = window.proxy_status.text()
+        assert "Key sai." in text and "Lấy key mới." in text
+
+    def test_status_rendering_for_success(self, window):
+        from src.translator import ProxyStatus
+
+        window._on_proxy_checked(ProxyStatus(True, "ok", "Kết nối tốt."))
+        assert "Kết nối tốt." in window.proxy_status.text()
+
+    def test_server_status_shows_stopped(self, window):
+        from src.proxy_manager import ProxyServerManager
+
+        ProxyServerManager.instance().stop()
+        window._refresh_server_status()
+        assert "Đã tắt" in window.server_status.text()
+        assert window.server_toggle_btn.text() == "Bật server"

@@ -2,11 +2,15 @@
 
 ## ⚡ Cách nhanh nhất — không cần gõ lệnh
 
-**Windows**: nhấp đôi vào **`start_windows.bat`**.
+**Windows**: nhấp đôi vào **`Start_App.bat`**.
 **Linux/macOS**: chạy `./start_unix.sh`.
 
-Script tự tìm Python, tự tạo venv, tự cài thư viện, rồi mở app. Lần đầu mất vài phút
-(tải ~150MB). Có lỗi thì nó dừng lại và in ra lệnh cần chạy — cửa sổ **không tự tắt**.
+Script tự tìm Python, tự tạo venv, tự cài thư viện, tự bật server dịch thuật ngầm rồi mở
+app. Lần đầu mất vài phút (tải ~150MB). Có lỗi thì nó dừng lại và in ra lệnh cần chạy —
+cửa sổ **không tự tắt**.
+
+Sau khi app mở: tab **Tuỳ chỉnh nâng cao** → dán **Gemini API key** → **Lưu key &&
+khởi động lại server**. Không cần đụng tới `.env` hay mở CMD thứ hai.
 
 **Đang lỗi mà không rõ vì sao?** Chạy công cụ chẩn đoán:
 
@@ -102,7 +106,28 @@ Cần **cả hai**: module Python `pyrubberband` **và** binary `rubberband` tro
 
 ---
 
-## Bước 3 — Cấu hình `.env`
+## Bước 3 — Cấu hình API key
+
+### Cách 1 (khuyến nghị) — nhập thẳng trong app
+
+Mở app → tab **Tuỳ chỉnh nâng cao** → ô **Gemini API key** → **Lưu key && khởi động lại
+server**. Key ghi vào **`config.ini`** cạnh app, lần sau tự điền lại. Nút **Kiểm tra kết
+nối** báo rõ hỏng ở đâu:
+
+| Báo lỗi | Nghĩa là |
+|---|---|
+| `Không kết nối được tới ...` | Server dịch thuật chưa chạy hoặc sai cổng |
+| `Proxy đang chạy nhưng chưa có GEMINI_API_KEY` | Server sống nhưng chưa nhận key |
+| `API key không hợp lệ` | Key sai hoặc chưa bật quyền Gemini API |
+| `API key hết hạn mức (quota)` | Key đúng nhưng hết lượt gọi |
+| `Model ... không tồn tại` | Sai tên model trong `config.ini` |
+| `Kết nối tốt` | Gọi Gemini thành công |
+
+`config.ini` **chứa API key** — đã nằm sẵn trong `.gitignore`, đừng gửi file này cho ai.
+Trên Linux/macOS file được đặt quyền `600` (chỉ chủ máy đọc được); Windows không có cơ chế
+tương đương.
+
+### Cách 2 — dùng file `.env`
 
 ```bash
 cp .env.example .env      # Windows: copy .env.example .env
@@ -117,8 +142,11 @@ SUBAI_PROXY_URL="http://127.0.0.1:8000"
 
 **Quan trọng — key này là của *server*, không phải của app desktop.** App desktop không
 bao giờ gọi thẳng Gemini; nó gửi câu thoại đến Proxy Server, và chỉ tiến trình chạy
-`uvicorn server.proxy_server:app` mới đọc `GEMINI_API_KEY`. Chạy server trên cùng máy thì
-một file `.env` ở gốc dự án phục vụ được cả hai.
+`uvicorn server.proxy_server:app` mới đọc `GEMINI_API_KEY`. Từ v1.1 app tự bật server này
+ngầm và truyền key sang cho nó, nên bạn chỉ cần nhập key một chỗ duy nhất.
+
+**Thứ tự ưu tiên**: `config.ini` (nhập ở giao diện) thắng `.env`, `.env` thắng giá trị
+mặc định. Biến môi trường đặt sẵn trong shell thắng `.env` nhưng thua `config.ini`.
 
 Các biến `.env` mà app đọc:
 
@@ -265,3 +293,24 @@ trích xuất phụ đề gốc.
 Chụp lại **toàn bộ chữ** mà `python check_setup.py` in ra (hoặc thông báo lỗi đầy đủ trong
 terminal) — đó là thứ cần thiết để tìm ra nguyên nhân. Ảnh chụp thư mục không cho biết app
 lỗi ở đâu.
+
+### Bấm "Kiểm tra kết nối" mà app đứng im vài giây
+
+Bình thường: nút này gọi Gemini thật để xác minh key nên mất 1-5 giây. Việc kiểm tra chạy
+ở thread nền nên cửa sổ vẫn kéo/bấm được, chỉ có hai nút bị mờ cho tới khi xong.
+
+### Có sẵn server chạy ngoài ở cổng 8000
+
+App tự phát hiện: nếu đã có SubAI Proxy sống ở địa chỉ trong `config.ini` thì nó dùng
+luôn, không bật thêm tiến trình thứ hai. Tab **Tuỳ chỉnh nâng cao** ghi rõ
+"Có server ngoài đang chạy".
+
+### Cổng 8000 bị chiếm bởi app khác
+
+Đổi cổng trong `config.ini`:
+
+```ini
+[proxy]
+url = http://127.0.0.1:8123
+port = 8123
+```

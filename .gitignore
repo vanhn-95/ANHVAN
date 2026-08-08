@@ -46,3 +46,6 @@ settings.json
 .mypy_cache/
 .idea/
 .vscode/
+
+# Cấu hình người dùng - CHỨA API KEY
+config.ini

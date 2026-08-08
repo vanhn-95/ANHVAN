@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import List, Sequence
 from urllib import error, request
 
@@ -12,6 +13,20 @@ from .utils import PipelineError, Segment
 
 BATCH_SIZE = 40
 MAX_RETRIES = 3
+
+
+@dataclass
+class ProxyStatus:
+    """Kết quả nút 'Kiểm tra kết nối' - phân biệt rõ từng nguyên nhân."""
+
+    ok: bool
+    code: str        # ok | no_url | unreachable | no_key | bad_key | quota | bad_model | network | error
+    message: str
+    hint: str = ""
+
+    @property
+    def full_text(self) -> str:
+        return f"{self.message} {self.hint}".strip()
 
 
 class TranslatorClient:
@@ -33,6 +48,63 @@ class TranslatorClient:
                 return resp.status == 200
         except Exception:
             return False
+
+    def diagnose(self, timeout: int = 30) -> ProxyStatus:
+        """Kiểm tra từng lớp một và nói rõ hỏng ở đâu: proxy, key, hay Gemini."""
+        if not self.proxy_url:
+            return ProxyStatus(False, "no_url", "Chưa nhập địa chỉ Proxy Server.")
+
+        # Lớp 1 - proxy có sống không?
+        try:
+            with request.urlopen(f"{self.proxy_url}/health", timeout=10) as resp:
+                health = json.loads(resp.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            return ProxyStatus(
+                False, "unreachable",
+                f"Proxy trả về HTTP {exc.code} ở /health.",
+                "Địa chỉ có đúng là SubAI Proxy Server không?",
+            )
+        except Exception as exc:
+            return ProxyStatus(
+                False, "unreachable",
+                f"Không kết nối được tới {self.proxy_url}.",
+                f"Server dịch thuật chưa chạy hoặc sai cổng. ({exc.__class__.__name__})",
+            )
+
+        # Lớp 2 - proxy có key chưa?
+        if not health.get("api_key_configured"):
+            return ProxyStatus(
+                False, "no_key",
+                "Proxy đang chạy nhưng chưa có GEMINI_API_KEY.",
+                "Nhập API key vào ô bên trên rồi bấm Lưu để khởi động lại server.",
+            )
+
+        # Lớp 3 - key có gọi được Gemini thật không?
+        try:
+            with request.urlopen(f"{self.proxy_url}/verify", timeout=timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            return ProxyStatus(
+                False, "error",
+                "Proxy sống nhưng không kiểm tra được API key.",
+                f"{exc.__class__.__name__}: {exc}",
+            )
+
+        status = str(body.get("status", "error"))
+        detail = str(body.get("detail", ""))
+        model = str(body.get("model", ""))
+
+        if status == "ok":
+            return ProxyStatus(True, "ok", f"Kết nối tốt - Gemini phản hồi bình thường ({model}).")
+
+        hints = {
+            "bad_key": "Lấy key mới tại https://aistudio.google.com/apikey",
+            "quota": "Chờ hạn mức reset hoặc dùng key khác.",
+            "bad_model": "Đổi model trong config.ini (mục [gemini] model).",
+            "network": "Kiểm tra mạng/firewall của máy chạy server.",
+            "no_key": "Nhập API key vào ô bên trên rồi bấm Lưu.",
+        }
+        return ProxyStatus(False, status, detail or "Gemini không phản hồi.", hints.get(status, ""))
 
     def translate_segments(
         self,

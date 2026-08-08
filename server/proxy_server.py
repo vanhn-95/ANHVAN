@@ -13,11 +13,18 @@ from typing import List, Optional
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-API_KEY = os.environ.get("GEMINI_API_KEY", "")
 # Danh sách license hợp lệ, phân tách bởi dấu phẩy. Để trống = không kiểm tra.
 ALLOWED_LICENSES = {k.strip() for k in os.environ.get("SUBAI_LICENSES", "").split(",") if k.strip()}
 MAX_LINES = 100
+
+
+def model_name() -> str:
+    """Đọc lúc gọi chứ không cache, để restart server là ăn ngay giá trị mới."""
+    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+def api_key() -> str:
+    return os.environ.get("GEMINI_API_KEY", "").strip()
 
 app = FastAPI(title="SubAI Translation Proxy", version="1.0.0")
 
@@ -75,9 +82,58 @@ def _parse_numbered(raw: str, count: int) -> List[str]:
     return [parsed.get(i + 1, "") for i in range(count)]
 
 
+def classify_gemini_error(exc: Exception) -> tuple[str, str]:
+    """Quy lỗi của Gemini về mã máy đọc được + câu tiếng Việt cho người dùng."""
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+
+    if any(hint in text for hint in ("api_key_invalid", "api key not valid", "unauthenticated",
+                                     "invalid authentication", "401", "403", "permission_denied")):
+        return "bad_key", "API key không hợp lệ hoặc chưa bật quyền cho Gemini API."
+    if any(hint in text for hint in ("resource_exhausted", "quota", "rate limit", "429")):
+        return "quota", "API key hết hạn mức (quota) hoặc bị giới hạn tốc độ."
+    if any(hint in text for hint in ("not found", "404", "unsupported model")):
+        return "bad_model", f"Model '{model_name()}' không tồn tại hoặc key không được dùng model này."
+    if any(hint in text for hint in ("timeout", "connection", "network", "dns", "unreachable")):
+        return "network", "Server không kết nối được tới Google. Kiểm tra mạng/proxy/firewall."
+    return "error", f"Gemini báo lỗi: {exc}"
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "model": MODEL_NAME, "api_key_configured": bool(API_KEY)}
+    return {"status": "ok", "model": model_name(), "api_key_configured": bool(api_key())}
+
+
+@app.get("/verify")
+def verify() -> dict:
+    """Gọi thử Gemini một câu ngắn để biết key có dùng được thật không.
+
+    Trả về status: ok | no_key | bad_key | quota | bad_model | network | error
+    """
+    if not api_key():
+        return {
+            "status": "no_key",
+            "detail": "Server chưa được cấu hình GEMINI_API_KEY.",
+            "model": model_name(),
+        }
+
+    try:
+        from google import genai  # noqa: PLC0415
+    except ImportError:
+        return {
+            "status": "error",
+            "detail": "Server thiếu thư viện google-genai (pip install google-genai).",
+            "model": model_name(),
+        }
+
+    try:
+        client = genai.Client(api_key=api_key())
+        client.models.generate_content(model=model_name(), contents="ping")
+    except Exception as exc:
+        status, detail = classify_gemini_error(exc)
+        return {"status": status, "detail": detail, "model": model_name()}
+
+    return {"status": "ok", "detail": "API key hợp lệ, gọi Gemini thành công.",
+            "model": model_name()}
 
 
 @app.post("/translate", response_model=TranslateResponse)
@@ -86,7 +142,7 @@ def translate(
     x_license_key: Optional[str] = Header(default=None, alias="X-License-Key"),
 ) -> TranslateResponse:
     _check_license(x_license_key)
-    if not API_KEY:
+    if not api_key():
         raise HTTPException(status_code=500, detail="Server chưa cấu hình GEMINI_API_KEY.")
 
     try:
@@ -103,8 +159,8 @@ def translate(
     )
 
     try:
-        client = genai.Client(api_key=API_KEY)
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        client = genai.Client(api_key=api_key())
+        response = client.models.generate_content(model=model_name(), contents=prompt)
         text = response.text or ""
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Gemini lỗi: {exc}") from exc
@@ -112,4 +168,4 @@ def translate(
     translated = _parse_numbered(text, len(request.lines))
     # Dòng nào model bỏ sót thì giữ nguyên bản gốc để không lệch timeline.
     translated = [t or request.lines[i] for i, t in enumerate(translated)]
-    return TranslateResponse(lines=translated, model=MODEL_NAME)
+    return TranslateResponse(lines=translated, model=model_name())

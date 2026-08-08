@@ -23,11 +23,16 @@ Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi
 
 ## ⚡ Chạy Nhanh
 
-- **Windows**: nhấp đôi **`start_windows.bat`**
+- **Windows**: nhấp đôi **`Start_App.bat`**
 - **Linux/macOS**: `./start_unix.sh`
 
-Script tự tạo venv, cài thư viện và mở app. Gặp lỗi thì chạy `python check_setup.py` —
-công cụ này in ra chính xác đang thiếu gì và cần gõ lệnh nào.
+Script tự tạo venv, cài thư viện, **tự bật server dịch thuật ngầm** rồi mở app —
+không cần mở thêm cửa sổ CMD nào. Gặp lỗi thì chạy `python check_setup.py`.
+
+API key Gemini nhập thẳng trong app (tab **Tuỳ chỉnh nâng cao**), lưu vào `config.ini`
+nên chỉ phải nhập một lần:
+
+![Nhập API key](docs/screenshot-apikey.png)
 
 ## 🛠️ Cài Đặt
 
@@ -67,9 +72,24 @@ gặp): **[docs/SETUP.md](docs/SETUP.md)**.
 
 ## 🚀 Sử Dụng
 
-### 1. Chạy Proxy Server dịch thuật
+### 1. Mở app desktop
 
-API key Gemini chỉ nằm ở server, client không bao giờ giữ key.
+```bash
+python run_desktop.py           # hoặc: python -m desktop
+```
+
+`run_desktop.py` tự bật Proxy Server dịch thuật bằng `subprocess` (trên Windows không
+bung cửa sổ console) và tự tắt khi bạn đóng app. Lần đầu mở, vào tab **Tuỳ chỉnh nâng
+cao** → dán **Gemini API key** → bấm **Lưu key && khởi động lại server**. Key được ghi
+vào `config.ini`, lần sau tự điền lại.
+
+Nút **Kiểm tra kết nối** phân biệt rõ từng nguyên nhân: proxy chưa chạy, proxy chạy
+nhưng chưa có key, key sai, key hết quota, model không tồn tại, hay lỗi mạng.
+
+### 2. Chạy Proxy Server riêng (tuỳ chọn)
+
+Muốn đặt server trên máy khác thì tắt server nhúng trong `config.ini`
+(`[proxy] auto_start = false`) rồi chạy thủ công:
 
 ```bash
 export GEMINI_API_KEY="YOUR_KEY"
@@ -82,12 +102,6 @@ Hoặc bằng Docker:
 ```bash
 docker build -t subai-proxy .
 docker run -p 8000:8000 -e GEMINI_API_KEY="YOUR_KEY" subai-proxy
-```
-
-### 2. Mở app desktop
-
-```bash
-python run_desktop.py           # hoặc: python -m desktop
 ```
 
 Dán URL (hoặc chọn file) → chọn ngôn ngữ đích → tick các bước cần chạy → **Bắt đầu xử lý**.
