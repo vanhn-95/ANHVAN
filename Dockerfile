@@ -12,6 +12,8 @@ COPY requirements-server.txt .
 RUN pip install --no-cache-dir -r requirements-server.txt
 
 COPY server/ ./server/
+# server/__init__.py nạp .env qua loader này.
+COPY src/__init__.py src/env_file.py ./src/
 
 EXPOSE 8000
 

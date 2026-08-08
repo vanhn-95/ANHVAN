@@ -104,3 +104,9 @@ vừa là sidechain điều khiển nén nhạc nền. `attack=20ms` để nhạ
 `JobConfig` (dataclass) là nguồn sự thật duy nhất cho một job — UI, CLI và test đều dùng
 chung, và `validate()` trả về thông báo lỗi tiếng Việt hiển thị thẳng cho người dùng.
 `AppSettings` lưu job gần nhất + danh sách nguồn gần đây vào `~/.subai/settings.json`.
+
+`src/env_file.py` là loader `.env` viết tay (không cần `python-dotenv`). Nó được gọi ngay
+trong `src/__init__.py` và `server/__init__.py`, tức là **trước** khi `config.py` và
+`security_guard.py` đọc `os.environ` ở cấp module — nếu nạp muộn hơn thì các giá trị mặc
+định đã bị "đóng băng" mất rồi. Biến môi trường có sẵn trong shell luôn thắng file `.env`,
+nên `GEMINI_API_KEY=xxx uvicorn ...` vẫn đè được lên file khi cần.

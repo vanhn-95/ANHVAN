@@ -7,6 +7,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# Cho phép chạy trực tiếp `python desktop/main_window.py` (không qua package).
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -45,9 +49,9 @@ from src.main_pipeline import PipelineResult, plan_stages
 from src.security_guard import get_hwid, verify_license
 from src.translator import TranslatorClient
 
-from .environment import blocking_problems, run_checks
-from .theme import DANGER, OK, WARN
-from .worker import PipelineWorker
+from desktop.environment import blocking_problems, run_checks
+from desktop.theme import DANGER, OK, WARN
+from desktop.worker import PipelineWorker
 
 VIDEO_FILTER = "Video (*.mp4 *.mkv *.mov *.avi *.webm *.flv);;Tất cả file (*)"
 
@@ -596,3 +600,14 @@ class MainWindow(QMainWindow):
         self.settings.last_job = self.collect_config()
         self.settings.save()
         event.accept()
+
+
+def main() -> int:
+    """Cho phép mở app bằng `python -m desktop.main_window`."""
+    from desktop.app import main as launch
+
+    return launch()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

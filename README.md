@@ -25,8 +25,9 @@ Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi
 
 ### Yêu cầu
 - **OS**: Windows 10/11 64-bit, Ubuntu 22.04+, hoặc macOS 12+
+- **Python**: 3.10 hoặc 3.11 (Coqui TTS chưa hỗ trợ 3.12+)
 - **GPU**: NVIDIA ≥ 6GB VRAM + CUDA 12.1 (chạy CPU vẫn được nhưng rất chậm)
-- **Bắt buộc**: Python 3.10+, FFmpeg trong PATH
+- **Bắt buộc**: FFmpeg trong PATH
 
 ### Cài nhanh
 
@@ -38,9 +39,11 @@ python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
 # PyTorch bản CUDA (bỏ qua nếu chỉ chạy CPU)
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121
 
 pip install -r requirements.txt
+
+cp .env.example .env            # rồi điền GEMINI_API_KEY nếu chạy proxy trên máy này
 ```
 
 Chỉ muốn mở giao diện để xem trước, chưa cài engine AI nặng:
@@ -50,6 +53,9 @@ pip install -r requirements-desktop.txt
 ```
 
 App vẫn mở bình thường — tab **Môi trường** sẽ chỉ rõ thiếu gì và cần cài lệnh nào.
+
+📖 Hướng dẫn đầy đủ từng bước (FFmpeg, Rubber Band, `.env`, build `.exe`, các lỗi hay
+gặp): **[docs/SETUP.md](docs/SETUP.md)**.
 
 ## 🚀 Sử Dụng
 
@@ -73,7 +79,7 @@ docker run -p 8000:8000 -e GEMINI_API_KEY="YOUR_KEY" subai-proxy
 ### 2. Mở app desktop
 
 ```bash
-python run_desktop.py
+python run_desktop.py           # hoặc: python -m desktop
 ```
 
 Dán URL (hoặc chọn file) → chọn ngôn ngữ đích → tick các bước cần chạy → **Bắt đầu xử lý**.
@@ -117,7 +123,8 @@ QT_QPA_PLATFORM=offscreen pytest
 
 ## 📦 Đóng Gói & Bảo Mật
 
-Build bản chạy độc lập:
+Build bản chạy độc lập (spec đã kèm sẵn `--collect-all` cho toàn bộ thư viện AI nên
+không dính `ModuleNotFoundError` lúc chạy file build):
 
 ```bash
 pip install pyinstaller

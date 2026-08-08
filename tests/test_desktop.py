@@ -102,3 +102,18 @@ class TestEnvironmentChecks:
     def test_blocking_problems_only_required(self):
         for check in blocking_problems(run_checks()):
             assert check.required and not check.ok
+
+    def test_rubberband_is_optional(self):
+        rubberband = next(c for c in run_checks() if c.name == "Rubber Band")
+        assert not rubberband.required
+
+    def test_rubberband_needs_module_and_binary(self, monkeypatch):
+        from desktop import environment
+
+        monkeypatch.setattr(environment, "module_available", lambda name: True)
+        monkeypatch.setattr(environment.shutil, "which", lambda name: None)
+
+        check = environment._rubberband_check()
+        assert not check.ok
+        assert "binary" in check.detail
+        assert "atempo" in check.detail

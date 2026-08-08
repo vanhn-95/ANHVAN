@@ -39,7 +39,11 @@ class JobConfig:
     """Toàn bộ thông số của một lần chạy pipeline."""
 
     source: str = ""                 # URL hoặc đường dẫn file local
-    output_dir: str = str(Path.home() / "SubAI" / "output")
+    output_dir: str = field(
+        default_factory=lambda: os.environ.get(
+            "SUBAI_OUTPUT_DIR", str(Path.home() / "SubAI" / "output")
+        )
+    )
     source_lang: str = "auto"
     target_lang: str = "vi"
 
@@ -53,10 +57,12 @@ class JobConfig:
     separate_audio: bool = True
     demucs_model: str = "htdemucs"
 
-    # Dịch
+    # Dịch (mặc định lấy từ .env nếu có, xem .env.example)
     translate: bool = True
-    proxy_url: str = "http://127.0.0.1:8000"
-    license_key: str = ""
+    proxy_url: str = field(
+        default_factory=lambda: os.environ.get("SUBAI_PROXY_URL", "http://127.0.0.1:8000")
+    )
+    license_key: str = field(default_factory=lambda: os.environ.get("SUBAI_LICENSE_KEY", ""))
 
     # Lồng tiếng
     dubbing: bool = True

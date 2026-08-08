@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 import sys
 from dataclasses import dataclass
 from typing import List
@@ -61,6 +62,32 @@ def _gpu_check() -> Check:
         return Check("GPU / CUDA", False, f"Lỗi khi dò GPU: {exc}", required=False)
 
 
+def _rubberband_check() -> Check:
+    """pyrubberband cần cả module Python lẫn binary `rubberband` trong PATH."""
+    has_module = module_available("pyrubberband")
+    has_binary = shutil.which("rubberband") is not None
+
+    if has_module and has_binary:
+        return Check("Rubber Band", True, "Căn tốc độ giọng đọc giữ nguyên cao độ", required=False)
+
+    if not has_module and not has_binary:
+        detail = "Thiếu cả module lẫn binary"
+        fix = "pip install pyrubberband + cài rubberband-cli"
+    elif not has_binary:
+        detail = "Có module Python nhưng thiếu binary `rubberband` trong PATH"
+        fix = "Linux: apt install rubberband-cli · Windows: tải từ breakfastquay.com"
+    else:
+        detail = "Có binary nhưng thiếu module Python"
+        fix = "pip install pyrubberband"
+
+    return Check(
+        "Rubber Band", False,
+        f"{detail} - sẽ tự dùng FFmpeg atempo thay thế (chất lượng thấp hơn một chút)",
+        required=False,
+        fix=fix,
+    )
+
+
 def run_checks() -> List[Check]:
     """Danh sách trạng thái phụ thuộc, hiển thị ở tab Môi trường."""
     ffmpeg = ffmpeg_path()
@@ -91,10 +118,7 @@ def run_checks() -> List[Check]:
             "Coqui TTS", "TTS", "Lồng tiếng XTTS-v2",
             "pip install TTS", required=False,
         ),
-        _module_check(
-            "Rubber Band", "pyrubberband", "Căn tốc độ giọng đọc chất lượng cao",
-            "pip install pyrubberband (cần rubberband-cli)", required=False,
-        ),
+        _rubberband_check(),
     ]
     return checks
 
