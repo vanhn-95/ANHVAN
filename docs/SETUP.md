@@ -1,5 +1,24 @@
 # Hướng Dẫn Cài Đặt & Build SubAI Studio
 
+## ⚡ Cách nhanh nhất — không cần gõ lệnh
+
+**Windows**: nhấp đôi vào **`start_windows.bat`**.
+**Linux/macOS**: chạy `./start_unix.sh`.
+
+Script tự tìm Python, tự tạo venv, tự cài thư viện, rồi mở app. Lần đầu mất vài phút
+(tải ~150MB). Có lỗi thì nó dừng lại và in ra lệnh cần chạy — cửa sổ **không tự tắt**.
+
+**Đang lỗi mà không rõ vì sao?** Chạy công cụ chẩn đoán:
+
+```bash
+python check_setup.py
+```
+
+Nó in ra đúng cái gì thiếu và lệnh phải gõ. Xem thêm mục
+[Lỗi thường gặp](#-lỗi-thường-gặp) ở cuối trang.
+
+---
+
 > **Phiên bản Python: 3.11** — đây là bản duy nhất được dùng để phát triển và kiểm thử
 > dự án này. Coqui `TTS` chưa hỗ trợ Python 3.12+ nên cài trên 3.12 sẽ hỏng bước lồng
 > tiếng. Kiểm tra trước khi tạo venv:
@@ -181,3 +200,68 @@ mở được cửa sổ bình thường.
 
 Bản thương mại nhớ đặt `SUBAI_DEV_MODE=0` và nhúng `SUBAI_PUBLIC_KEY` — xem phần
 **Đóng Gói & Bảo Mật** trong [README](../README.md).
+
+---
+
+## 🔧 Lỗi thường gặp
+
+Trước hết cứ chạy `python check_setup.py` — phần lớn trường hợp nó chỉ thẳng ra nguyên nhân.
+
+### Nhấp đôi `run_desktop.py` thì cửa sổ đen nháy lên rồi tắt ngay
+
+Đây **không phải** app bị lỗi im lặng: Python chạy, gặp lỗi, in ra rồi đóng cửa sổ trước
+khi bạn kịp đọc. Dùng **`start_windows.bat`** thay vì nhấp đôi file `.py` — nó giữ cửa sổ
+lại để bạn đọc thông báo.
+
+### Giải nén ra thư mục lồng nhau `SubAIStudio\SubAIStudio`
+
+File zip có sẵn thư mục gốc `SubAIStudio/`, nên nếu bạn tạo thêm một thư mục tên
+`SubAIStudio` rồi giải nén vào đó thì sẽ thành hai tầng. Mọi lệnh phải chạy ở **tầng trong**
+— tầng nào chứa `run_desktop.py` thì đó là tầng đúng. Kiểm tra bằng `dir` (Windows) hoặc
+`ls`: phải thấy `run_desktop.py`, `desktop`, `src`.
+
+### `'python' is not recognized as an internal or external command`
+
+Python chưa có trong PATH. Cài lại Python 3.11 và **tick ô "Add python.exe to PATH"**, hoặc
+dùng `py -3.11` thay cho `python`. Cài xong phải **mở lại** cửa sổ terminal.
+
+### Gõ `python` thì Microsoft Store hiện lên
+
+Đó là bản Python giả lập của Windows. Tải bản thật tại
+<https://www.python.org/downloads/release/python-3119/>, hoặc dùng `py -3.11`.
+
+### `ModuleNotFoundError: No module named 'PySide6'`
+
+Chưa cài thư viện, hoặc đã cài nhưng **chưa kích hoạt venv**. Dấu hiệu đã kích hoạt: đầu
+dòng lệnh có chữ `(venv)`.
+
+```powershell
+venv\Scripts\activate
+pip install -r requirements-desktop.txt
+```
+
+### `ModuleNotFoundError: No module named 'src'` hoặc `'desktop'`
+
+Đang chạy sai thư mục. `cd` vào thư mục chứa `run_desktop.py` rồi chạy lại.
+
+### App mở được nhưng tab Môi trường toàn dấu đỏ
+
+Bình thường nếu mới cài `requirements-desktop.txt` — bộ đó chỉ đủ mở giao diện. Muốn xử lý
+video thật thì cài tiếp `requirements.txt` và FFmpeg (xem Bước 1 và Bước 2).
+
+### Bấm "Bắt đầu xử lý" thì báo không kết nối được Proxy Server
+
+Proxy chưa chạy. Mở thêm một cửa sổ terminal nữa:
+
+```bash
+uvicorn server.proxy_server:app --host 0.0.0.0 --port 8000
+```
+
+Muốn bỏ qua bước dịch để test cho nhanh thì bỏ tick **"Dịch phụ đề bằng AI"** — app sẽ chỉ
+trích xuất phụ đề gốc.
+
+### Vẫn không được
+
+Chụp lại **toàn bộ chữ** mà `python check_setup.py` in ra (hoặc thông báo lỗi đầy đủ trong
+terminal) — đó là thứ cần thiết để tìm ra nguyên nhân. Ảnh chụp thư mục không cho biết app
+lỗi ở đâu.

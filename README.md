@@ -21,6 +21,14 @@ nhái giọng gốc → render video hoàn chỉnh. Tất cả chạy trong mộ
 Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi trường** (báo engine nào
 đã sẵn sàng, engine nào thiếu và lệnh cài), **Bản quyền** (HWID + license key).
 
+## ⚡ Chạy Nhanh
+
+- **Windows**: nhấp đôi **`start_windows.bat`**
+- **Linux/macOS**: `./start_unix.sh`
+
+Script tự tạo venv, cài thư viện và mở app. Gặp lỗi thì chạy `python check_setup.py` —
+công cụ này in ra chính xác đang thiếu gì và cần gõ lệnh nào.
+
 ## 🛠️ Cài Đặt
 
 ### Yêu cầu
