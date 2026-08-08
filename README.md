@@ -25,7 +25,7 @@ Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi
 
 ### Yêu cầu
 - **OS**: Windows 10/11 64-bit, Ubuntu 22.04+, hoặc macOS 12+
-- **Python**: 3.10 hoặc 3.11 (Coqui TTS chưa hỗ trợ 3.12+)
+- **Python**: 3.11 (bắt buộc — Coqui TTS chưa hỗ trợ 3.12+)
 - **GPU**: NVIDIA ≥ 6GB VRAM + CUDA 12.1 (chạy CPU vẫn được nhưng rất chậm)
 - **Bắt buộc**: FFmpeg trong PATH
 
@@ -35,7 +35,7 @@ Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi
 git clone https://github.com/vanhn-95/anhvan.git
 cd anhvan
 
-python -m venv venv
+python3.11 -m venv venv         # Windows: py -3.11 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
 # PyTorch bản CUDA (bỏ qua nếu chỉ chạy CPU)

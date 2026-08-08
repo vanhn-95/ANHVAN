@@ -13,7 +13,7 @@ setup(
     long_description_content_type="text/markdown",
     author="SubAI Team",
     packages=find_packages(include=["src", "src.*", "server", "server.*", "desktop", "desktop.*"]),
-    python_requires=">=3.10",
+    python_requires=">=3.11,<3.12",
     install_requires=[
         "PySide6-Essentials>=6.6.0",
         "requests>=2.31.0",
@@ -44,7 +44,7 @@ setup(
     },
     classifiers=[
         "Environment :: X11 Applications :: Qt",
-        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Topic :: Multimedia :: Video",
     ],
 )

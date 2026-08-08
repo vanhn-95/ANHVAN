@@ -1,7 +1,15 @@
 # Hướng Dẫn Cài Đặt & Build SubAI Studio
 
-> **Phiên bản Python**: dùng **3.10 hoặc 3.11**. Coqui `TTS` chưa hỗ trợ Python 3.12+,
-> nên cài trên 3.12 sẽ hỏng bước lồng tiếng (các bước còn lại vẫn chạy).
+> **Phiên bản Python: 3.11** — đây là bản duy nhất được dùng để phát triển và kiểm thử
+> dự án này. Coqui `TTS` chưa hỗ trợ Python 3.12+ nên cài trên 3.12 sẽ hỏng bước lồng
+> tiếng. Kiểm tra trước khi tạo venv:
+>
+> ```bash
+> python --version      # phải ra Python 3.11.x
+> ```
+>
+> Máy có nhiều bản Python thì chỉ đích danh: `py -3.11 -m venv venv` (Windows) hoặc
+> `python3.11 -m venv venv` (Linux/macOS).
 
 ---
 
@@ -11,11 +19,11 @@ Không cài bằng `root` hay Python toàn cục: PyInstaller sẽ gom nhầm th
 vào bản build.
 
 ```bash
-python -m venv venv
-
 # Windows:
+py -3.11 -m venv venv
 venv\Scripts\activate
 # Linux / macOS:
+python3.11 -m venv venv
 source venv/bin/activate
 
 # PyTorch bản CUDA 12.1 - phải cài TRƯỚC để pip không kéo về bản CPU
