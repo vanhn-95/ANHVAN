@@ -1,0 +1,28 @@
+# --- Desktop GUI (bắt buộc để chạy app) ---
+PySide6-Essentials>=6.6.0
+
+# --- PyTorch Engine (Yêu cầu cài đúng bản CUDA) ---
+torch>=2.1.0
+torchaudio>=2.1.0
+torchvision>=0.16.0
+
+# --- AI Models & Audio Processing ---
+demucs>=4.0.1
+faster-whisper>=1.0.0
+TTS>=0.22.0
+soundfile>=0.12.1
+pyrubberband>=0.3.0
+
+# --- Video & Networking ---
+yt-dlp>=2024.03.10
+requests>=2.31.0
+
+# --- Backend & Security ---
+fastapi>=0.110.0
+uvicorn>=0.28.0
+google-genai>=0.1.0
+pydantic>=2.6.0
+cryptography>=41.0.0
+WMI>=1.5.1; platform_system=="Windows"
+pyarmor>=8.5.0
+cython>=3.0.0

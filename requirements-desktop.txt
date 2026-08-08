@@ -1,0 +1,6 @@
+# Bộ dependency tối thiểu để mở giao diện desktop và chạy test.
+# Các engine AI nặng (torch/demucs/faster-whisper/TTS) được nạp lazy:
+# thiếu chúng thì app vẫn mở được và báo trạng thái ở tab "Môi trường".
+PySide6-Essentials>=6.6.0
+requests>=2.31.0
+cryptography>=41.0.0
