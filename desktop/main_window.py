@@ -51,6 +51,7 @@ from src.providers import DEFAULT_PROVIDER, PROVIDERS, TranslatorAgent
 from src.proxy_manager import ProxyServerManager
 from src.security_guard import get_hwid, verify_license
 
+from desktop.creator_tab import CreatorTab
 from desktop.environment import blocking_problems, run_checks
 from desktop.theme import DANGER, MUTED, OK, WARN
 from desktop.worker import PipelineWorker, ProxyCheckWorker
@@ -89,6 +90,9 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(_scrollable(self._build_job_tab()), "Xử lý video")
+        self.creator_tab = CreatorTab(self, self.app_config)
+        # Tab này tự quản vùng cuộn bên trong để hàng nút không bị trôi.
+        self.tabs.addTab(self.creator_tab, "Tự động hoá nâng cao (Affiliate Bot)")
         self.tabs.addTab(_scrollable(self._build_advanced_tab()), "Tuỳ chỉnh nâng cao")
         self.tabs.addTab(self._build_environment_tab(), "Môi trường")
         self.tabs.addTab(_scrollable(self._build_license_tab()), "Bản quyền")
@@ -561,6 +565,36 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(self.hwid_field.text())
         self.statusBar().showMessage("Đã sao chép HWID.", 3000)
 
+    # ------------------------------------- API dùng chung cho các tab con (host)
+    def log(self, message: str) -> None:
+        """Ghi vào khung log chung ở đáy cửa sổ."""
+        self._append_log(message)
+
+    def set_stage(self, name: str, index: int, total: int) -> None:
+        self.stage_label.setText(f"Bước {index}/{total}: {name}" if total else name)
+
+    def set_progress(self, value: float) -> None:
+        self.progress_bar.setValue(int(min(1.0, max(0.0, value)) * 1000))
+
+    def claim_job(self, owner) -> bool:
+        """Chỉ cho một job chạy tại một thời điểm (pipeline thường hoặc Bot)."""
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(
+                self, "Đang bận",
+                "Job ở tab “Xử lý video” đang chạy. Dừng job đó trước đã.",
+            )
+            return False
+        if owner is not self.creator_tab and self.creator_tab.is_running():
+            QMessageBox.warning(self, "Đang bận", "Bot đang chạy. Dừng Bot trước đã.")
+            return False
+
+        self.log_view.clear()
+        self.start_btn.setEnabled(owner is self)
+        return True
+
+    def release_job(self, owner) -> None:
+        self.start_btn.setEnabled(True)
+
     # ---------------------------------------------------- API key & proxy server
     def _toggle_key_visibility(self, shown: bool) -> None:
         self.api_key_input.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
@@ -768,11 +802,13 @@ class MainWindow(QMainWindow):
                 self.tabs.setCurrentIndex(2)
                 return
 
+        if not self.claim_job(self):
+            return
+
         self.settings.last_job = config
         self.settings.remember_source(config.source)
         self.settings.save()
 
-        self.log_view.clear()
         self.progress_bar.setValue(0)
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)

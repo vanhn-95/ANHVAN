@@ -18,8 +18,25 @@ nhái giọng gốc → render video hoàn chỉnh. Tất cả chạy trong mộ
 | Auto-ducking: hạ nhạc nền khi có lời thoại | FFmpeg `sidechaincompress` |
 | Khoá bản quyền theo máy | HWID + chữ ký RSA-PSS |
 
-Giao diện gồm 4 tab: **Xử lý video**, **Tuỳ chỉnh nâng cao**, **Môi trường** (báo engine nào
-đã sẵn sàng, engine nào thiếu và lệnh cài), **Bản quyền** (HWID + license key).
+Giao diện gồm 5 tab: **Xử lý video**, **Tự động hoá nâng cao (Affiliate Bot)**,
+**Tuỳ chỉnh nâng cao**, **Môi trường** (báo engine nào đã sẵn sàng, engine nào thiếu và
+lệnh cài), **Bản quyền** (HWID + license key).
+
+## 🤖 Affiliate Bot
+
+Dán link video → Bot chạy 9 bước → ra video TikTok đã lồng tiếng Việt, có intro 3 giây và
+nhạc nền mới, rồi tự mở thư mục kết quả.
+
+| Bước | Làm gì |
+|---|---|
+| Intro 3 giây | Tự nhập chữ, hoặc để AI nghĩ câu hook (nền gradient + chữ zoom) |
+| Viết lại kịch bản | Prompt phong cách TikTok Gen Z, giữ nguyên mốc thời gian |
+| Chọn nhạc | AI đoán cảm xúc video rồi chọn nhạc khớp từ thư viện của bạn |
+| Trộn âm thanh | Auto-ducking, nhạc nền -15dB |
+
+Chi tiết: **[docs/AFFILIATE_BOT.md](docs/AFFILIATE_BOT.md)**
+
+![Affiliate Bot](docs/screenshot-bot.png)
 
 ## ⚡ Chạy Nhanh
 
@@ -135,6 +152,7 @@ python -m src.main_pipeline video.mp4 --no-dub --burn      # chỉ phụ đề, 
 desktop/     Giao diện PySide6 (app, cửa sổ chính, worker thread, theme, env check)
 src/         Pipeline: downloader → separator → ASR → translator → TTS → composer
              providers.py: factory đa nhà cung cấp AI (Gemini/OpenAI/DeepSeek)
+             creator_pipeline.py + intro_maker/script_writer/music_mixer: Affiliate Bot
 server/      FastAPI proxy giữ API key, gọi provider qua factory
 tools/       Công cụ phát hành license (keygen / issue)
 packaging/   PyInstaller spec để build bản .exe / .app

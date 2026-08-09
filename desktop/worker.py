@@ -88,3 +88,41 @@ class ProxyCheckWorker(QThread):
         except Exception as exc:
             status = ProxyStatus(False, "error", "Lỗi khi kiểm tra.", f"{exc.__class__.__name__}: {exc}")
         self.checked.emit(status)
+
+
+class CreatorWorker(QThread):
+    """Chạy pipeline Auto Creator ở thread nền."""
+
+    log = Signal(str)
+    stage_changed = Signal(str, int, int)
+    progress_changed = Signal(float)
+    succeeded = Signal(object)   # CreatorResult
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, config, parent=None) -> None:
+        super().__init__(parent)
+        self.config = config
+        self.reporter = ProgressReporter(
+            on_log=self.log.emit,
+            on_stage=lambda name, index, total: self.stage_changed.emit(name, index, total),
+            on_progress=self.progress_changed.emit,
+        )
+
+    def cancel(self) -> None:
+        self.reporter.cancel()
+        self.log.emit("Đang dừng Bot... chờ bước hiện tại kết thúc.")
+
+    def run(self) -> None:
+        from src.creator_pipeline import CreatorPipeline
+
+        try:
+            result = CreatorPipeline(self.config, self.reporter).run()
+        except CancelledError:
+            self.cancelled.emit()
+        except PipelineError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(f"Lỗi không mong đợi: {exc.__class__.__name__}: {exc}")
+        else:
+            self.succeeded.emit(result)

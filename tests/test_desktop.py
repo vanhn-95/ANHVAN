@@ -31,9 +31,10 @@ def window(app, tmp_path, monkeypatch):
 
 
 class TestMainWindow:
-    def test_opens_with_four_tabs(self, window):
-        assert window.tabs.count() == 4
+    def test_opens_with_five_tabs(self, window):
+        assert window.tabs.count() == 5
         assert window.tabs.tabText(0) == "Xử lý video"
+        assert "Affiliate Bot" in window.tabs.tabText(1)
 
     def test_collect_config_reads_form(self, window):
         window.source_input.setText("https://youtu.be/abc")
@@ -325,3 +326,92 @@ class TestConnectionDialog:
 
         window._select_data(window.provider_combo, "gemini")
         assert "Gemini" in window.api_key_label.text()
+
+
+class TestCreatorTab:
+    def test_tab_exists_with_controls(self, window):
+        tab = window.creator_tab
+        assert tab.start_btn.text().endswith("Bắt đầu chạy Bot")
+        assert tab.cancel_btn.text() == "Dừng"
+        assert not tab.cancel_btn.isEnabled()
+
+    def test_all_feature_toggles_present(self, window):
+        tab = window.creator_tab
+        for checkbox in (tab.chk_rewrite, tab.chk_tts, tab.chk_keep_sub,
+                         tab.chk_intro, tab.chk_intro_ai, tab.chk_music,
+                         tab.chk_ducking, tab.chk_separate, tab.chk_clone):
+            assert checkbox is not None
+
+    def test_collect_config_reads_form(self, window):
+        tab = window.creator_tab
+        tab.source_input.setText("https://v.douyin.com/abc")
+        tab.intro_input.setText("MẸO HAY MỖI NGÀY")
+        tab.music_db.setValue(-12.0)
+
+        config = tab.collect_config()
+        assert config.source == "https://v.douyin.com/abc"
+        assert config.intro_text == "MẸO HAY MỖI NGÀY"
+        assert config.music_db == -12.0
+
+    def test_disabling_intro_disables_its_fields(self, window):
+        tab = window.creator_tab
+        tab.chk_intro.setChecked(False)
+        assert not tab.intro_input.isEnabled()
+        assert not tab.chk_intro_ai.isEnabled()
+
+        tab.chk_intro.setChecked(True)
+        assert tab.intro_input.isEnabled()
+
+    def test_disabling_tts_disables_voice_clone(self, window):
+        tab = window.creator_tab
+        tab.chk_tts.setChecked(True)
+        tab.chk_clone.setChecked(True)
+        tab.chk_tts.setChecked(False)
+        assert not tab.chk_clone.isChecked()
+        assert not tab.chk_clone.isEnabled()
+
+    def test_plan_label_follows_toggles(self, window):
+        tab = window.creator_tab
+        tab.chk_intro.setChecked(True)
+        assert "intro 3 giây" in tab.plan_label.text().lower()
+
+        tab.chk_intro.setChecked(False)
+        assert "intro 3 giây" not in tab.plan_label.text().lower()
+
+    def test_invalid_config_blocks_start(self, window, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+
+        warned = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a))
+        window.creator_tab.source_input.setText("")
+        window.creator_tab.start()
+
+        assert warned
+        assert window.creator_tab.worker is None
+
+    def test_only_one_job_at_a_time(self, window, monkeypatch):
+        """Bot không được chạy khi pipeline thường đang chạy."""
+        from PySide6.QtWidgets import QMessageBox
+
+        class FakeWorker:
+            def isRunning(self):
+                return True
+
+        warned = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a))
+        window.worker = FakeWorker()
+        try:
+            assert window.claim_job(window.creator_tab) is False
+            assert warned
+        finally:
+            window.worker = None
+
+    def test_provider_combo_defaults_to_saved(self, window):
+        assert window.creator_tab.provider_combo.currentData() == window.app_config.provider
+
+    def test_host_progress_bridge(self, window):
+        window.set_progress(0.5)
+        assert window.progress_bar.value() == 500
+
+        window.set_stage("Tạo intro", 8, 9)
+        assert "8/9" in window.stage_label.text()
