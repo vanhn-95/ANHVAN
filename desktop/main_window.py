@@ -52,7 +52,7 @@ from src.proxy_manager import ProxyServerManager
 from src.security_guard import get_hwid, verify_license
 
 from desktop.creator_tab import CreatorTab
-from desktop.environment import blocking_problems, run_checks
+from desktop.environment import blocking_problems, format_missing, run_checks
 from desktop.theme import DANGER, MUTED, OK, WARN
 from desktop.worker import PipelineWorker, ProxyCheckWorker
 
@@ -235,6 +235,14 @@ class MainWindow(QMainWindow):
             self.provider_combo.addItem(spec.label, name)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         proxy_form.addRow("Nhà cung cấp AI", self.provider_combo)
+
+        provider_hint = QLabel(
+            "▼ Bấm vào ô trên để đổi: "
+            + " · ".join(spec.label for spec in PROVIDERS.values())
+        )
+        provider_hint.setObjectName("subtitle")
+        provider_hint.setWordWrap(True)
+        proxy_form.addRow("", provider_hint)
 
         # --- API key ---
         key_row = QHBoxLayout()
@@ -793,13 +801,14 @@ class MainWindow(QMainWindow):
 
         problems = blocking_problems(run_checks())
         if problems:
-            names = "\n".join(f"• {p.name}: {p.fix or p.detail}" for p in problems)
             answer = QMessageBox.question(
                 self, "Thiếu thành phần bắt buộc",
-                f"Những thành phần sau chưa sẵn sàng:\n\n{names}\n\nVẫn chạy thử?",
+                "Những thành phần sau chưa sẵn sàng:\n\n"
+                + format_missing(problems)
+                + "\n\nVẫn chạy thử?",
             )
             if answer != QMessageBox.Yes:
-                self.tabs.setCurrentIndex(2)
+                self.tabs.setCurrentIndex(3)     # mở tab Môi trường
                 return
 
         if not self.claim_job(self):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import List
@@ -37,14 +38,70 @@ def _module_check(name: str, module: str, purpose: str, fix: str, required: bool
     )
 
 
+def has_nvidia_gpu() -> bool:
+    """Máy có GPU NVIDIA không - dò được cả khi chưa cài PyTorch.
+
+    Cần biết điều này TRƯỚC khi gợi ý lệnh cài: máy không có NVIDIA mà bảo cài
+    bản wheel `cu121` thì lệnh sẽ lỗi hoặc cài về một bản torch vô dụng.
+    """
+    if shutil.which("nvidia-smi") is None:
+        return False
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return proc.returncode == 0 and bool(proc.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def torch_install_command() -> str:
+    """Lệnh cài PyTorch đúng với phần cứng đang có."""
+    if has_nvidia_gpu():
+        return ("pip install torch torchaudio --index-url "
+                "https://download.pytorch.org/whl/cu121")
+    # Không có NVIDIA: bản CPU mặc định từ PyPI. Tuyệt đối không gợi ý cu121.
+    return "pip install torch torchaudio"
+
+
+def _torch_check() -> Check:
+    """PyTorch chỉ cần cho Demucs và XTTS - Faster-Whisper không dùng tới nó."""
+    if module_available("torch"):
+        try:
+            import torch
+
+            return Check("PyTorch", True, f"phiên bản {torch.__version__}")
+        except Exception as exc:
+            return Check("PyTorch", False, f"Cài rồi nhưng import lỗi: {exc}",
+                         required=False, fix=torch_install_command())
+
+    return Check(
+        "PyTorch", False,
+        "Thiếu - cần cho tách nhạc nền (Demucs) và lồng tiếng (XTTS)",
+        required=False,
+        fix=torch_install_command(),
+    )
+
+
 def _gpu_check() -> Check:
+    """Báo trạng thái tăng tốc phần cứng. Không bao giờ chặn app chạy."""
+    if not has_nvidia_gpu():
+        return Check(
+            "GPU / CUDA", False,
+            "Đang chạy chế độ CPU (sẽ chậm hơn). Để tối ưu, cần có GPU NVIDIA.",
+            required=False,
+            fix="",     # cố ý để trống: không có NVIDIA thì không có lệnh nào giúp được
+        )
+
     if not module_available("torch"):
         return Check(
             "GPU / CUDA", False,
-            "Thiếu PyTorch - mọi engine AI đều không chạy được",
-            required=True,
-            fix="pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121",
+            "Máy có GPU NVIDIA nhưng chưa cài PyTorch nên chưa dùng được",
+            required=False,
+            fix=torch_install_command(),
         )
+
     try:
         import torch
 
@@ -52,11 +109,12 @@ def _gpu_check() -> Check:
             name = torch.cuda.get_device_name(0)
             vram = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
             return Check("GPU / CUDA", True, f"{name} - {vram:.1f} GB VRAM")
+
         return Check(
             "GPU / CUDA", False,
-            f"PyTorch {torch.__version__} chạy CPU - xử lý sẽ rất chậm",
+            "Có GPU NVIDIA nhưng PyTorch đang là bản CPU - xử lý sẽ chậm",
             required=False,
-            fix="Cài driver NVIDIA + bản torch CUDA 12.1",
+            fix=torch_install_command(),
         )
     except Exception as exc:
         return Check("GPU / CUDA", False, f"Lỗi khi dò GPU: {exc}", required=False)
@@ -101,6 +159,7 @@ def run_checks() -> List[Check]:
             ffmpeg or "Không tìm thấy trong PATH - bắt buộc phải có",
             fix="" if ffmpeg else "Tải tại ffmpeg.org rồi thêm vào PATH",
         ),
+        _torch_check(),
         _gpu_check(),
         _module_check(
             "yt-dlp", "yt_dlp", "Tải video từ URL",
@@ -125,3 +184,13 @@ def run_checks() -> List[Check]:
 
 def blocking_problems(checks: List[Check]) -> List[Check]:
     return [c for c in checks if c.required and not c.ok]
+
+
+def format_missing(checks: List[Check]) -> str:
+    """Ghi rõ từng thành phần thiếu kèm lệnh cài, cho hộp thoại cảnh báo."""
+    lines: List[str] = []
+    for check in checks:
+        lines.append(f"• {check.name}: {check.detail}")
+        if check.fix:
+            lines.append(f"   Lệnh cài đặt: {check.fix}")
+    return "\n".join(lines)

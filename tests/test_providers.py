@@ -93,7 +93,7 @@ class TestFactory:
         assert isinstance(TranslatorAgent.create("OpenAI", "k"), OpenAIAgent)
 
     def test_default_model_per_provider(self):
-        assert TranslatorAgent.create("openai", "k").model == "gpt-4o-mini"
+        assert TranslatorAgent.create("openai", "k").model == "gpt-4o"
         assert TranslatorAgent.create("deepseek", "k").model == "deepseek-chat"
         assert TranslatorAgent.create("gemini", "k").model == "gemini-2.5-flash"
 
@@ -101,7 +101,7 @@ class TestFactory:
         assert TranslatorAgent.create("openai", "k", "gpt-4o").model == "gpt-4o"
 
     def test_blank_model_falls_back_to_default(self):
-        assert TranslatorAgent.create("openai", "k", "   ").model == "gpt-4o-mini"
+        assert TranslatorAgent.create("openai", "k", "   ").model == "gpt-4o"
 
     def test_unknown_provider_raises(self):
         with pytest.raises(ProviderError) as exc:
@@ -217,7 +217,7 @@ class TestErrorsAcrossProviders:
 
         code, detail = agent.verify()
         assert code == "ok"
-        assert "gpt-4o-mini" in detail
+        assert "gpt-4o" in detail
 
     def test_verify_without_key_never_calls_network(self, fake):
         agent = OpenAIAgent("")
@@ -295,3 +295,30 @@ class TestClassifier:
         for status in (401, 429, 404):
             _, message = classify_http_error(status, "")
             assert any(ch in message for ch in "ăâđêôơư")
+
+
+class TestDeepSeekAliases:
+    """Tên người dùng hay gõ phải map sang tên model thật của API."""
+
+    @pytest.mark.parametrize("typed,real", [
+        ("deepseek-v3", "deepseek-chat"),
+        ("deepseek-V3", "deepseek-chat"),
+        ("deepseek-r1", "deepseek-reasoner"),
+        ("deepseek-chat", "deepseek-chat"),
+        ("deepseek-reasoner", "deepseek-reasoner"),
+    ])
+    def test_alias_resolution(self, typed, real):
+        assert TranslatorAgent.create("deepseek", "k", typed).model == real
+
+    def test_alias_used_in_actual_request(self, fake):
+        agent = TranslatorAgent.create("deepseek", "k", "deepseek-v3")
+        agent.base_url = fake.url
+        fake.response = openai_reply("ok")
+        agent.complete("x")
+        assert fake.last_body["model"] == "deepseek-chat"
+
+    def test_every_suggested_model_is_callable(self, fake):
+        """Mọi model hiện trong dropdown phải gọi được, không cái nào 404 vì tên sai."""
+        for name in PROVIDERS["deepseek"].models:
+            agent = TranslatorAgent.create("deepseek", "k", name)
+            assert agent.model in ("deepseek-chat", "deepseek-reasoner")

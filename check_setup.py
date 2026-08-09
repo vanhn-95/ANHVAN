@@ -91,6 +91,38 @@ def check_ffmpeg() -> None:
     print(f"{OK} FFmpeg - {version[:56]}")
 
 
+def has_nvidia_gpu() -> bool:
+    """Có GPU NVIDIA không - quyết định gợi ý bản torch CUDA hay bản CPU."""
+    if shutil.which("nvidia-smi") is None:
+        return False
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return proc.returncode == 0 and bool(proc.stdout.strip())
+    except Exception:
+        return False
+
+
+def torch_install_hint() -> str:
+    if has_nvidia_gpu():
+        return ("pip install torch torchaudio --index-url "
+                "https://download.pytorch.org/whl/cu121")
+    return "pip install torch torchaudio    (ban CPU - may nay khong co GPU NVIDIA)"
+
+
+def check_gpu() -> None:
+    if has_nvidia_gpu():
+        print(f"{OK} GPU NVIDIA - dung duoc tang toc CUDA")
+    else:
+        print(f"{WARN} Dang chay che do CPU (se cham hon). De toi uu, can co GPU NVIDIA.")
+        warnings.append(
+            "Khong co GPU NVIDIA: moi buoc AI se chay bang CPU, cham hon nhieu "
+            "nhung van chay duoc. Dung cai ban torch cu121."
+        )
+
+
 def check_gui_import() -> None:
     """Thử import đúng đường dẫn mà app dùng - bắt lỗi thật thay vì đoán."""
     sys.path.insert(0, str(ROOT))
@@ -150,10 +182,11 @@ def main() -> int:
     check_ffmpeg()
     line()
 
+    check_gpu()
+    line()
+
     print("Engine AI (thiếu thì bước tương ứng bị tắt, app vẫn mở):")
-    check_module("PyTorch", "torch",
-                 "pip install torch torchaudio --index-url "
-                 "https://download.pytorch.org/whl/cu121", False)
+    check_module("PyTorch", "torch", torch_install_hint(), False)
     check_module("Faster-Whisper (phụ đề)", "faster_whisper", "pip install faster-whisper", False)
     check_module("Demucs (tách nhạc nền)", "demucs", "pip install demucs", False)
     check_module("Coqui TTS (lồng tiếng)", "TTS", "pip install TTS", False)

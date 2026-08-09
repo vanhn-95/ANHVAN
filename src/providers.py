@@ -38,7 +38,13 @@ PROVIDERS: Dict[str, ProviderSpec] = {
         name="gemini",
         label="Google Gemini",
         default_model="gemini-2.5-flash",
-        models=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+        models=[
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ],
         env_key="GEMINI_API_KEY",
         signup_url="https://aistudio.google.com/apikey",
         note="Có hạn mức miễn phí - phù hợp để bắt đầu.",
@@ -46,8 +52,8 @@ PROVIDERS: Dict[str, ProviderSpec] = {
     "openai": ProviderSpec(
         name="openai",
         label="ChatGPT (OpenAI)",
-        default_model="gpt-4o-mini",
-        models=["gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini"],
+        default_model="gpt-4o",
+        models=["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
         env_key="OPENAI_API_KEY",
         signup_url="https://platform.openai.com/api-keys",
         note="Trả phí theo token, không có hạn mức miễn phí.",
@@ -56,10 +62,11 @@ PROVIDERS: Dict[str, ProviderSpec] = {
         name="deepseek",
         label="DeepSeek",
         default_model="deepseek-chat",
-        models=["deepseek-chat", "deepseek-reasoner"],
+        models=["deepseek-v3", "deepseek-r1", "deepseek-chat", "deepseek-reasoner"],
         env_key="DEEPSEEK_API_KEY",
         signup_url="https://platform.deepseek.com/api_keys",
-        note="Rẻ nhất trong ba. Lưu ý: model V3 có tên API là 'deepseek-chat'.",
+        note="Rẻ nhất trong ba. Chọn 'deepseek-v3' cũng được - app tự đổi sang "
+             "tên API thật là 'deepseek-chat'.",
     ),
 }
 

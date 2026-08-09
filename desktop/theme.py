@@ -46,7 +46,10 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus {{
     border: 1px solid {ACCENT};
 }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
+/* Cố tình KHÔNG style QComboBox::drop-down / ::down-arrow.
+   Đặt bất kỳ luật nào lên hai phần tử này sẽ tắt cách vẽ của style Fusion và
+   mũi tên biến mất, khiến combo trông y hệt ô text — người dùng không biết là
+   bấm được để xổ danh sách. Để Fusion tự vẽ mũi tên gốc. */
 QComboBox QAbstractItemView {{
     background-color: {SURFACE_ALT};
     border: 1px solid {BORDER};

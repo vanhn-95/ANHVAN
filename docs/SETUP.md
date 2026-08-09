@@ -190,7 +190,15 @@ Mở tab **Môi trường** để soát lại:
 - ✅ xanh — sẵn sàng.
 - ⚠ vàng — **tuỳ chọn**, không cần chuyển xanh. Thiếu thì bước đó chạy chế độ suy giảm
   (ví dụ thiếu Demucs thì bỏ qua tách nhạc nền; thiếu Rubber Band thì dùng atempo).
-- ❌ đỏ — **bắt buộc**, phải sửa: FFmpeg, PyTorch, Faster-Whisper.
+- ❌ đỏ — **bắt buộc**, phải sửa: FFmpeg và Faster-Whisper.
+
+**Máy không có GPU NVIDIA (CPU AMD/Intel)**: hoàn toàn bình thường, app vẫn chạy đủ chức
+năng, chỉ chậm hơn. Tab Môi trường sẽ ghi *"Đang chạy chế độ CPU (sẽ chậm hơn)"* và
+**không bao giờ** gợi ý lệnh `cu121` — cài bản CUDA trên máy không có NVIDIA sẽ lỗi. Lệnh
+đúng cho máy CPU là `pip install torch torchaudio`.
+
+Lưu ý: **Faster-Whisper không cần PyTorch** (nó dùng CTranslate2), nên chỉ làm phụ đề thì
+không phải cài torch. Torch chỉ cần cho Demucs (tách nhạc nền) và XTTS (lồng tiếng).
 
 Nói cách khác: chỉ cần **hết dấu đỏ**, dấu vàng để nguyên vẫn dùng được app.
 

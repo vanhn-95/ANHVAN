@@ -210,7 +210,7 @@ class TestProviderUi:
     def test_switching_provider_loads_its_defaults(self, window):
         window._select_data(window.provider_combo, "openai")
         assert window.current_provider() == "openai"
-        assert window.model_input.currentText() == "gpt-4o-mini"
+        assert window.model_input.currentText() == "gpt-4o"
         assert "platform.openai.com" in window.key_hint.text()
 
         window._select_data(window.provider_combo, "deepseek")
@@ -509,3 +509,107 @@ class TestExportSettings:
 
     def test_test_button_renamed(self, window):
         assert "AI" in window.test_btn.text() and "Proxy" in window.test_btn.text()
+
+
+class TestCpuOnlyMachine:
+    """Máy AMD/Intel không có NVIDIA: tuyệt đối không được gợi ý bản cu121."""
+
+    @pytest.fixture
+    def cpu_only(self, monkeypatch):
+        from desktop import environment
+
+        monkeypatch.setattr(environment, "has_nvidia_gpu", lambda: False)
+        return environment
+
+    @pytest.fixture
+    def with_nvidia(self, monkeypatch):
+        from desktop import environment
+
+        monkeypatch.setattr(environment, "has_nvidia_gpu", lambda: True)
+        return environment
+
+    def test_no_cuda_command_anywhere_on_cpu(self, cpu_only):
+        for check in cpu_only.run_checks():
+            assert "cu121" not in check.fix
+            assert "download.pytorch.org" not in check.fix
+
+    def test_cpu_message_matches_request(self, cpu_only):
+        gpu = next(c for c in cpu_only.run_checks() if c.name == "GPU / CUDA")
+        assert gpu.detail == "Đang chạy chế độ CPU (sẽ chậm hơn). Để tối ưu, cần có GPU NVIDIA."
+        assert gpu.fix == ""
+        assert not gpu.required
+
+    def test_torch_hint_is_plain_pip_on_cpu(self, cpu_only):
+        assert cpu_only.torch_install_command() == "pip install torch torchaudio"
+
+    def test_torch_hint_is_cuda_when_nvidia_present(self, with_nvidia):
+        assert "cu121" in with_nvidia.torch_install_command()
+
+    def test_gpu_check_never_blocks(self, cpu_only):
+        blocking = [c.name for c in cpu_only.blocking_problems(cpu_only.run_checks())]
+        assert "GPU / CUDA" not in blocking
+        assert "PyTorch" not in blocking
+
+    def test_faster_whisper_is_the_blocking_one(self, cpu_only):
+        """Faster-Whisper dùng CTranslate2, không cần torch - nên nó mới là bắt buộc."""
+        whisper = next(c for c in cpu_only.run_checks() if c.name == "Faster-Whisper")
+        assert whisper.required
+        assert whisper.fix == "pip install faster-whisper"
+
+    def test_missing_popup_spells_out_install_command(self, cpu_only):
+        checks = [
+            cpu_only.Check("Faster-Whisper", False, "Thiếu", True, "pip install faster-whisper")
+        ]
+        text = cpu_only.format_missing(checks)
+        assert "Lệnh cài đặt: pip install faster-whisper" in text
+        assert "cu121" not in text
+
+    def test_nvidia_detection_uses_nvidia_smi(self, monkeypatch):
+        from desktop import environment
+
+        monkeypatch.setattr(environment.shutil, "which", lambda name: None)
+        assert environment.has_nvidia_gpu() is False
+
+
+class TestProviderModelLists:
+    def test_gemini_models_available(self, window):
+        window._select_data(window.provider_combo, "gemini")
+        models = [window.model_input.itemText(i) for i in range(window.model_input.count())]
+        for name in ("gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"):
+            assert name in models
+
+    def test_openai_models_available(self, window):
+        window._select_data(window.provider_combo, "openai")
+        models = [window.model_input.itemText(i) for i in range(window.model_input.count())]
+        for name in ("gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"):
+            assert name in models
+
+    def test_deepseek_models_available(self, window):
+        window._select_data(window.provider_combo, "deepseek")
+        models = [window.model_input.itemText(i) for i in range(window.model_input.count())]
+        for name in ("deepseek-v3", "deepseek-r1", "deepseek-chat"):
+            assert name in models
+
+    def test_provider_hint_lists_all_three(self, window):
+        # Nhãn gợi ý nằm ngay dưới combo, cho người dùng biết bấm vào đổi được.
+        from PySide6.QtWidgets import QLabel
+
+        texts = [w.text() for w in window.findChildren(QLabel) if "Bấm vào ô trên" in w.text()]
+        assert texts, "thiếu dòng gợi ý dưới dropdown"
+        assert "Google Gemini" in texts[0]
+        assert "ChatGPT (OpenAI)" in texts[0]
+        assert "DeepSeek" in texts[0]
+
+    def test_combo_arrow_not_styled_away(self):
+        """Đặt luật lên drop-down/down-arrow làm mũi tên biến mất trong Fusion.
+
+        Chỉ bắt lỗi khi có LUẬT thật (selector kèm dấu `{`), chú thích nhắc tên
+        hai phần tử này thì không sao.
+        """
+        import re
+
+        from desktop.theme import STYLESHEET
+
+        for selector in ("drop-down", "down-arrow"):
+            rule = re.search(r"QComboBox::" + selector + r"[^\n]*\{", STYLESHEET)
+            assert rule is None, f"stylesheet đang style ::{selector}, mũi tên sẽ mất"
