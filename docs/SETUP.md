@@ -2,7 +2,7 @@
 
 ## ⚡ Cách nhanh nhất — không cần gõ lệnh
 
-**Windows**: nhấp đôi vào **`Start_App.bat`**.
+**Windows**: nhấp đôi vào **`Start_SubAI.bat`**.
 **Linux/macOS**: chạy `./start_unix.sh`.
 
 Script tự tìm Python, tự tạo venv, tự cài thư viện, tự bật server dịch thuật ngầm rồi mở

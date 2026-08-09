@@ -123,10 +123,13 @@ dùng.
 
 ## Những gì app này không làm
 
-Không có chức năng né phát hiện bản quyền (lật ảnh, đổi cao độ, jitter tốc độ, xoá
-metadata) và không tải nhạc có bản quyền từ nền tảng khác. Các kỹ thuật đó không giúp kênh
-sống lâu hơn — chúng chỉ làm chậm việc bị phát hiện, trong khi vẫn để lại đủ dấu vết cho
-Content ID.
+Không có chức năng né phát hiện bản quyền — không lật ảnh, không đổi cao độ, không jitter
+tốc độ khung hình — và không tải nhạc có bản quyền từ nền tảng khác. Các kỹ thuật đó không
+giúp kênh sống lâu hơn: chúng chỉ làm chậm việc bị phát hiện, trong khi vẫn để lại đủ dấu
+vết cho Content ID.
+
+(App **có** xoá metadata khi xuất — xem mục 6 — nhưng đó là thao tác xuất bản sạch bình
+thường, không phải để giấu nguồn gốc, và cũng không giấu được.)
 
 Muốn làm affiliate bền, hướng đi hiệu quả hơn là: xin phép creator gốc (nhiều người sẵn
 sàng cho localize để lấy thêm view), dùng video do nhãn hàng cung cấp, hoặc tự quay phần
@@ -134,3 +137,61 @@ review của mình rồi dùng app này để lồng tiếng và làm phụ đ�
 
 Bạn chịu trách nhiệm về quyền sử dụng video nguồn — app có ghi cảnh báo này ngay trên giao
 diện.
+
+---
+
+## 5. Xem trước & Timeline
+
+Tab Bot chia hai cột bằng `QSplitter`:
+
+- **Trái — Xem trước video**: chọn file trong máy (hoặc bấm **Xem trước**) là app trích một
+  frame bằng FFmpeg ở thread nền và hiện kèm dòng thông tin: `1280×720 · ngang → sẽ thêm
+  nền mờ hai bên · 30fps · 3s`. Nguồn là URL thì chưa có frame cho tới khi Bot tải video về.
+- **Phải — Cấu hình**: nguồn, kịch bản, intro, nhạc, xuất bản.
+
+**Timeline** (`QGraphicsScene` / `QGraphicsView`) kéo hết bề ngang phía dưới, vẽ 3 track
+xếp dọc theo đúng thời gian thực:
+
+| Track | Màu | Nội dung |
+|---|---|---|
+| Video | tím + xanh | Khối tím là intro 3 giây, khối xanh là video gốc |
+| Giọng nói | vàng | Giọng TTS mới, bắt đầu sau intro |
+| Nhạc nền | cam | Nhạc mới, phủ hết phần thân video |
+
+Bật/tắt checkbox nào thì track tương ứng xuất hiện hoặc biến mất ngay. Thước thời gian tự
+chọn bước chia (1s → 15 phút) sao cho luôn khoảng 6-10 vạch.
+
+---
+
+## 6. Xuất bản 9:16 chất lượng cao
+
+Bản cuối **luôn** đi qua `VerticalRenderer`, mặc định đúng chuẩn TikTok / Reels / Shorts:
+
+| Thông số | Mặc định |
+|---|---|
+| Khung hình | 1080 × 1920 (9:16) |
+| Codec | libx264 (đổi được sang libx265) |
+| CRF | 18 |
+| Preset | slow |
+| Audio | AAC 192kbps, 48kHz |
+| Khác | `yuv420p`, `+faststart`, xoá metadata |
+
+**Video ngang xử lý thế nào** — chọn được 4 kiểu lấp khung:
+
+- `blur` (khuyên dùng): nền là chính video phóng to, cắt kín khung rồi làm mờ và tối đi 6%.
+- `black` / `white`: nền màu trơn.
+- `crop`: phóng to cho đầy khung, chấp nhận mất rìa hai bên.
+
+![Nền mờ 9:16](screenshot-vertical.png)
+
+Video được scale bằng `flags=lanczos` và chỉ scale **một lần duy nhất** ở bước cuối — các
+bước trung gian (ghép intro, thay tiếng) giữ nguyên độ phân giải gốc, nên không bị suy hao
+chồng chất.
+
+**Về việc xoá metadata**: `-map_metadata -1` xoá các tag như `title`, `artist`, `comment`,
+thông tin máy quay, GPS. Đây là thao tác xuất bản sạch bình thường. Nhưng nó **không giấu
+được nguồn gốc video**: TikTok, YouTube và Facebook so khớp bằng dấu vân tay hình ảnh và âm
+thanh, không đọc metadata. Đừng trông cậy vào nó để tránh bản quyền.
+
+Preset `slow` + CRF 18 render khá lâu (video 3 phút có thể mất 5-15 phút tuỳ CPU). Cần
+nhanh thì đổi preset sang `fast`/`veryfast`, chất lượng vẫn tốt.

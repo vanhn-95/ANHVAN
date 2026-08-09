@@ -33,6 +33,8 @@ nhạc nền mới, rồi tự mở thư mục kết quả.
 | Viết lại kịch bản | Prompt phong cách TikTok Gen Z, giữ nguyên mốc thời gian |
 | Chọn nhạc | AI đoán cảm xúc video rồi chọn nhạc khớp từ thư viện của bạn |
 | Trộn âm thanh | Auto-ducking, nhạc nền -15dB |
+| Xem trước + Timeline | Frame đầu video, 3 track màu theo thời gian |
+| Xuất bản | 9:16 1080×1920, CRF 18, preset slow, audio 192k |
 
 Chi tiết: **[docs/AFFILIATE_BOT.md](docs/AFFILIATE_BOT.md)**
 
@@ -40,7 +42,7 @@ Chi tiết: **[docs/AFFILIATE_BOT.md](docs/AFFILIATE_BOT.md)**
 
 ## ⚡ Chạy Nhanh
 
-- **Windows**: nhấp đôi **`Start_App.bat`**
+- **Windows**: nhấp đôi **`Start_SubAI.bat`**
 - **Linux/macOS**: `./start_unix.sh`
 
 Script tự tạo venv, cài thư viện, **tự bật server dịch thuật ngầm** rồi mở app —
@@ -106,7 +108,7 @@ cấp, lần sau tự điền lại.
 | ChatGPT (OpenAI) | `gpt-4o-mini` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | DeepSeek | `deepseek-chat` | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) |
 
-Nút **Kiểm tra kết nối Proxy & API** hiện hộp thoại phân biệt rõ từng nguyên nhân: proxy
+Nút **Kiểm tra kết nối AI & Proxy** hiện hộp thoại phân biệt rõ từng nguyên nhân: proxy
 chưa chạy, proxy chạy nhưng chưa có key, key sai, key hết quota, model không tồn tại, mất
 mạng, hay nhà cung cấp đang lỗi.
 
@@ -153,6 +155,7 @@ desktop/     Giao diện PySide6 (app, cửa sổ chính, worker thread, theme, 
 src/         Pipeline: downloader → separator → ASR → translator → TTS → composer
              providers.py: factory đa nhà cung cấp AI (Gemini/OpenAI/DeepSeek)
              creator_pipeline.py + intro_maker/script_writer/music_mixer: Affiliate Bot
+             vertical_render.py: xuất 9:16 chất lượng cao
 server/      FastAPI proxy giữ API key, gọi provider qua factory
 tools/       Công cụ phát hành license (keygen / issue)
 packaging/   PyInstaller spec để build bản .exe / .app

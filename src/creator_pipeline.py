@@ -22,6 +22,14 @@ from .progress import ProgressReporter
 from .providers import PROVIDERS
 from .script_writer import MoodResult, ScriptWriter, resolve_intro_text
 from .tts_engine import TTSEngine
+from .vertical_render import (
+    DEFAULT_CODEC,
+    DEFAULT_FILL,
+    TIKTOK_HEIGHT,
+    TIKTOK_WIDTH,
+    RenderSettings,
+    VerticalRenderer,
+)
 from .utils import (
     CancelledError,
     PipelineError,
@@ -71,6 +79,16 @@ class CreatorConfig:
     music_folder: str = ""           # để trống = assets/royalty_free_music
     music_db: float = -15.0
 
+    # Xuất bản: mặc định 9:16 1080x1920, CRF 18, preset slow, audio 192k
+    output_width: int = TIKTOK_WIDTH
+    output_height: int = TIKTOK_HEIGHT
+    fill_mode: str = DEFAULT_FILL
+    codec: str = DEFAULT_CODEC
+    crf: int = 18
+    preset: str = "slow"
+    audio_bitrate: str = "192k"
+    strip_metadata: bool = True
+
     keep_intermediates: bool = False
 
     def validate(self) -> None:
@@ -89,6 +107,12 @@ class CreatorConfig:
             raise ValueError("Âm lượng nhạc nền phải nằm trong khoảng -40dB đến 0dB.")
         if self.music_file.strip():
             validate_music_file(self.music_file)
+        # Ném ValueError với thông điệp rõ ràng nếu thông số xuất bản sai.
+        RenderSettings(
+            width=self.output_width, height=self.output_height,
+            fill_mode=self.fill_mode, codec=self.codec, crf=self.crf,
+            preset=self.preset, audio_bitrate=self.audio_bitrate,
+        ).validate()
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -173,6 +197,18 @@ class CreatorPipeline:
 
     def _has(self, key: str) -> bool:
         return any(s.key == key for s in self.stages)
+
+    def render_settings(self) -> RenderSettings:
+        return RenderSettings(
+            width=self.config.output_width,
+            height=self.config.output_height,
+            fill_mode=self.config.fill_mode,
+            codec=self.config.codec,
+            crf=self.config.crf,
+            preset=self.config.preset,
+            audio_bitrate=self.config.audio_bitrate,
+            strip_metadata=self.config.strip_metadata,
+        )
 
     def _writer(self) -> Optional[ScriptWriter]:
         if not self.config.api_key.strip():
@@ -306,7 +342,7 @@ class CreatorPipeline:
                     intro, body, self.workspace / "with_intro.mp4", self.reporter
                 )
 
-            # 9. Render cuối
+            # 9. Render cuối - luôn ra khung dọc 9:16 cho TikTok/Reels
             self._enter("render")
             final_path = output_dir / f"{stem}.tiktok.mp4"
             if self.config.burn_subtitles and result.subtitle:
@@ -315,9 +351,8 @@ class CreatorPipeline:
                     "⚠ Burn-in phụ đề khi có intro sẽ lệch mốc thời gian - "
                     "xuất phụ đề rời (.srt) thay vì ghi chết."
                 )
-            shutil.copy2(body, final_path)
-            result.video = final_path
-            self.reporter.progress(1.0)
+            renderer = VerticalRenderer(self.render_settings())
+            result.video = renderer.render(body, final_path, self.reporter)
 
             result.elapsed = time.time() - started
             self.reporter.log(f"✅ Xong sau {human_duration(result.elapsed)}: {final_path.name}")

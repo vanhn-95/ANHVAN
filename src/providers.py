@@ -249,6 +249,17 @@ class DeepSeekAgent(OpenAIAgent):
     spec = PROVIDERS["deepseek"]
     base_url = "https://api.deepseek.com/v1"
 
+    # Tên thương mại người dùng hay gõ -> tên model thật của API.
+    ALIASES = {
+        "deepseek-v3": "deepseek-chat",
+        "deepseek-v3.1": "deepseek-chat",
+        "deepseek-r1": "deepseek-reasoner",
+    }
+
+    def __init__(self, api_key: str, model: str = "") -> None:
+        super().__init__(api_key, model)
+        self.model = self.ALIASES.get(self.model.lower(), self.model)
+
 
 class GeminiAgent(TranslatorAgent):
     """Google Gemini qua REST generativelanguage."""

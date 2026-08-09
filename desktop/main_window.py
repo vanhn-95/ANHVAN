@@ -271,7 +271,7 @@ class MainWindow(QMainWindow):
         # "&&" vì Qt hiểu "&" đơn là ký tự phím tắt và nuốt nó đi.
         self.save_key_btn = QPushButton("Lưu key && khởi động lại server")
         self.save_key_btn.clicked.connect(self._save_and_restart_proxy)
-        self.test_btn = QPushButton("Kiểm tra kết nối Proxy && API")
+        self.test_btn = QPushButton("Kiểm tra kết nối AI && Proxy")
         self.test_btn.clicked.connect(self._test_proxy)
         button_row.addWidget(self.save_key_btn)
         button_row.addWidget(self.test_btn)

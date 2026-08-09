@@ -415,3 +415,97 @@ class TestCreatorTab:
 
         window.set_stage("Tạo intro", 8, 9)
         assert "8/9" in window.stage_label.text()
+
+
+class TestPreviewAndTimeline:
+    def test_splitter_has_two_panes(self, window):
+        assert window.creator_tab.splitter.count() == 2
+
+    def test_preview_starts_empty(self, window):
+        preview = window.creator_tab.preview
+        assert preview.info is None
+        assert preview.duration == 0.0
+
+    def test_url_source_explains_no_preview(self, window):
+        preview = window.creator_tab.preview
+        preview.load("https://v.douyin.com/abc")
+        assert "đường link" in preview.image.text()
+
+    def test_empty_source_message(self, window):
+        window.creator_tab.preview.load("")
+        assert "Chưa nhập" in window.creator_tab.preview.image.text()
+
+    def test_timeline_has_three_tracks(self, window):
+        names = [track.name for track in window.creator_tab.timeline.tracks]
+        assert names == ["Video", "Giọng nói", "Nhạc nền"]
+
+    def test_timeline_reflects_enabled_steps(self, window):
+        timeline = window.creator_tab.timeline
+        timeline.set_layout(30.0, has_intro=True, has_voice=True, has_music=True)
+        labels = timeline.clip_labels()
+        assert "Intro 3s" in labels
+        assert "Video gốc" in labels
+        assert "Giọng đọc mới (TTS)" in labels
+        assert "Nhạc nền mới" in labels
+
+    def test_timeline_drops_disabled_tracks(self, window):
+        timeline = window.creator_tab.timeline
+        timeline.set_layout(30.0, has_intro=False, has_voice=False, has_music=True)
+        labels = timeline.clip_labels()
+        assert "Intro 3s" not in labels
+        assert "Giọng đọc mới (TTS)" not in labels
+        assert "Nhạc nền mới" in labels
+
+    def test_intro_extends_total_duration(self, window):
+        timeline = window.creator_tab.timeline
+        timeline.set_layout(30.0, has_intro=True)
+        assert timeline.total_duration == pytest.approx(33.0)
+
+    def test_body_clip_starts_after_intro(self, window):
+        timeline = window.creator_tab.timeline
+        timeline.set_layout(20.0, has_intro=True, has_voice=True)
+        voice = timeline.tracks[1].clips[0]
+        assert voice.start == pytest.approx(3.0)
+        assert voice.end == pytest.approx(23.0)
+
+    def test_toggling_checkbox_updates_timeline(self, window):
+        tab = window.creator_tab
+        tab.preview.duration = 40.0
+        tab.chk_music.setChecked(False)
+        assert "Nhạc nền mới" not in tab.timeline.clip_labels()
+
+        tab.chk_music.setChecked(True)
+        assert "Nhạc nền mới" in tab.timeline.clip_labels()
+
+
+class TestExportSettings:
+    def test_defaults_are_tiktok_ready(self, window):
+        config = window.creator_tab.collect_config()
+        assert (config.output_width, config.output_height) == (1080, 1920)
+        assert config.crf == 18
+        assert config.preset == "slow"
+        assert config.audio_bitrate == "192k"
+        assert config.strip_metadata is True
+        assert config.fill_mode == "blur"
+
+    def test_resolution_choice_flows_to_config(self, window):
+        tab = window.creator_tab
+        tab.resolution_combo.setCurrentIndex(1)      # 720x1280
+        config = tab.collect_config()
+        assert (config.output_width, config.output_height) == (720, 1280)
+
+    def test_quality_controls_flow_to_config(self, window):
+        tab = window.creator_tab
+        tab.crf_spin.setValue(23)
+        tab.preset_combo.setCurrentText("medium")
+        tab.audio_bitrate_combo.setCurrentText("320k")
+        tab.chk_strip_metadata.setChecked(False)
+
+        config = tab.collect_config()
+        assert config.crf == 23
+        assert config.preset == "medium"
+        assert config.audio_bitrate == "320k"
+        assert config.strip_metadata is False
+
+    def test_test_button_renamed(self, window):
+        assert "AI" in window.test_btn.text() and "Proxy" in window.test_btn.text()

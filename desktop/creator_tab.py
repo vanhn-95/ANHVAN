@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -37,9 +39,12 @@ from src.creator_pipeline import CreatorConfig, CreatorResult, plan_stages
 from src.intro_maker import BACKGROUNDS
 from src.music_mixer import MUSIC_LIBRARY, ensure_library, list_library
 from src.providers import PROVIDERS
+from src.vertical_render import CODECS, FILL_MODES
 from src.script_writer import ScriptWriter
 
 from desktop.theme import DANGER, MUTED, OK, WARN
+from desktop.timeline_view import TimelineView
+from desktop.video_preview import VideoPreview
 from desktop.worker import CreatorWorker
 
 AUDIO_FILTER = "Nhạc (*.mp3 *.wav *.m4a *.aac *.flac *.ogg);;Tất cả file (*)"
@@ -72,6 +77,7 @@ class CreatorTab(QWidget):
         settings_layout.addWidget(self._build_script_box())
         settings_layout.addWidget(self._build_intro_box())
         settings_layout.addWidget(self._build_music_box())
+        settings_layout.addWidget(self._build_export_box())
         settings_layout.addStretch(1)
 
         scroll = QScrollArea()
@@ -80,11 +86,39 @@ class CreatorTab(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(settings)
 
+        # Cột trái: xem trước video. Cột phải: toàn bộ phần cấu hình.
+        self.preview = VideoPreview()
+        preview_box = QGroupBox("Xem trước video")
+        preview_layout = QVBoxLayout(preview_box)
+        preview_layout.addWidget(self.preview)
+
+        # Giới hạn bề ngang khung xem trước để cột cấu hình không bị bóp cụt.
+        preview_box.setMinimumWidth(220)
+        preview_box.setMaximumWidth(420)
+        scroll.setMinimumWidth(540)
+
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(preview_box)
+        self.splitter.addWidget(scroll)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([340, 900])
+
+        # Timeline kéo hết bề ngang vì nó vốn là thứ nằm ngang.
+        timeline_box = QGroupBox("Timeline")
+        timeline_layout = QVBoxLayout(timeline_box)
+        self.timeline = TimelineView()
+        timeline_layout.addWidget(self.timeline)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(10)
-        layout.addWidget(scroll, stretch=1)
+        layout.addWidget(self.splitter, stretch=1)
+        layout.addWidget(timeline_box)
         layout.addWidget(self._build_action_row())
+
+        self.preview.loaded.connect(self._on_preview_loaded)
+        self.source_input.editingFinished.connect(self._refresh_preview)
 
         self._sync_enabled()
 
@@ -97,11 +131,16 @@ class CreatorTab(QWidget):
         self.source_input.setPlaceholderText(
             "Dán link Douyin / RedNote (xiaohongshu) / YouTube / TikTok... hoặc chọn file"
         )
+        source_buttons = QHBoxLayout()
         browse = QPushButton("Chọn file...")
         browse.clicked.connect(self._pick_source)
+        preview_btn = QPushButton("Xem trước")
+        preview_btn.clicked.connect(self._refresh_preview)
+        source_buttons.addWidget(browse)
+        source_buttons.addWidget(preview_btn)
         grid.addWidget(QLabel("Link video"), 0, 0)
         grid.addWidget(self.source_input, 0, 1)
-        grid.addWidget(browse, 0, 2)
+        grid.addLayout(source_buttons, 0, 2)
 
         self.output_input = QLineEdit(str(Path.home() / "SubAI" / "creator"))
         pick_out = QPushButton("Chọn thư mục...")
@@ -253,6 +292,61 @@ class CreatorTab(QWidget):
         self._refresh_library_label()
         return box
 
+    def _build_export_box(self) -> QWidget:
+        box = QGroupBox("Xuất bản (TikTok / Reels)")
+        form = QFormLayout(box)
+
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItem("1080 × 1920 (9:16 — TikTok, Reels, Shorts)", (1080, 1920))
+        self.resolution_combo.addItem("720 × 1280 (9:16 nhẹ hơn)", (720, 1280))
+        self.resolution_combo.addItem("1080 × 1080 (1:1 vuông)", (1080, 1080))
+        form.addRow("Khung hình", self.resolution_combo)
+
+        self.fill_combo = QComboBox()
+        for key, label in FILL_MODES.items():
+            self.fill_combo.addItem(label, key)
+        form.addRow("Nền khi video ngang", self.fill_combo)
+
+        self.codec_combo = QComboBox()
+        for key, label in CODECS.items():
+            self.codec_combo.addItem(label, key)
+        form.addRow("Codec", self.codec_combo)
+
+        quality_row = QHBoxLayout()
+        self.crf_spin = QSpinBox()
+        self.crf_spin.setRange(0, 51)
+        self.crf_spin.setValue(18)
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(
+            ["veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"]
+        )
+        self.preset_combo.setCurrentText("slow")
+        self.audio_bitrate_combo = QComboBox()
+        self.audio_bitrate_combo.addItems(["192k", "256k", "320k"])
+        quality_row.addWidget(QLabel("CRF"))
+        quality_row.addWidget(self.crf_spin)
+        quality_row.addWidget(QLabel("Preset"))
+        quality_row.addWidget(self.preset_combo, 1)
+        quality_row.addWidget(QLabel("Audio"))
+        quality_row.addWidget(self.audio_bitrate_combo, 1)
+        form.addRow("Chất lượng", quality_row)
+
+        self.chk_strip_metadata = QCheckBox("Xoá metadata cũ khi xuất (-map_metadata -1)")
+        self.chk_strip_metadata.setChecked(True)
+        form.addRow("", self.chk_strip_metadata)
+
+        note = QLabel(
+            "CRF 18 + preset slow là mức nét cao, đổi lại render lâu hơn nhiều. "
+            "CRF càng nhỏ càng nét (18 ≈ gần như không thấy khác bản gốc).<br>"
+            "Xoá metadata giúp file sạch (bỏ tag máy quay, phần mềm, GPS) nhưng "
+            "<b>không giấu được nguồn gốc video</b> — hệ thống bản quyền so khớp bằng "
+            "dấu vân tay hình/tiếng, không đọc metadata."
+        )
+        note.setObjectName("subtitle")
+        note.setWordWrap(True)
+        form.addRow("", note)
+        return box
+
     def _build_action_row(self) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -302,6 +396,14 @@ class CreatorTab(QWidget):
             intro_background=self.intro_bg.currentData() or "tim",
             music_file=self.music_input.text().strip(),
             music_db=self.music_db.value(),
+            output_width=self.resolution_combo.currentData()[0],
+            output_height=self.resolution_combo.currentData()[1],
+            fill_mode=self.fill_combo.currentData() or "blur",
+            codec=self.codec_combo.currentData() or "libx264",
+            crf=self.crf_spin.value(),
+            preset=self.preset_combo.currentText(),
+            audio_bitrate=self.audio_bitrate_combo.currentText(),
+            strip_metadata=self.chk_strip_metadata.isChecked(),
         )
 
     def _sync_enabled(self) -> None:
@@ -318,6 +420,25 @@ class CreatorTab(QWidget):
         self.plan_label.setText(
             f"{len(stages)} bước: " + " → ".join(s.label for s in stages)
         )
+        self._refresh_timeline()
+
+    def _refresh_timeline(self) -> None:
+        """Vẽ lại timeline theo thời lượng video và các bước đang bật."""
+        self.timeline.set_layout(
+            duration=self.preview.duration,
+            has_intro=self.chk_intro.isChecked(),
+            has_voice=self.chk_tts.isChecked(),
+            has_music=self.chk_music.isChecked(),
+        )
+
+    def _refresh_preview(self) -> None:
+        self.preview.load(self.source_input.text())
+
+    def _on_preview_loaded(self, info, duration: float) -> None:
+        self.host.log(
+            f"Xem trước: {info.width}×{info.height}, {duration:.1f}s → sẽ xuất 1080×1920"
+        )
+        self._refresh_timeline()
 
     def _refresh_library_label(self) -> None:
         tracks = list_library()
@@ -339,6 +460,7 @@ class CreatorTab(QWidget):
         )
         if path:
             self.source_input.setText(path)
+            self._refresh_preview()
 
     def _pick_output(self) -> None:
         path = QFileDialog.getExistingDirectory(
